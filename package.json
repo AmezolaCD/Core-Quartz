@@ -1,0 +1,16 @@
+{
+  "name": "core-quartz",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core Quartz · portal de entrada única de Quartz Hotel & Spa",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:nucleo": "node --test \"test/nucleo/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
+  }
+}

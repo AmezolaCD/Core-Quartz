@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+# Conector Supabase local: apunta a producción y el repo es público (DECISIONS #37)
+.mcp.json
+coverage/
+test-results/
+playwright-report/
