@@ -129,11 +129,14 @@ describe('R5 · ya había una sesión en este navegador', () => {
     await esperarLlamada(nav, '/auth/v1/verify');
     await nav.page.waitForTimeout(900);
 
-    // El orden importa: lo de Ana se sube antes de que se borre.
-    const iSubida = nav.llamadas.findIndex((l) => l.url.includes('/rest/v1/') && l.metodo !== 'GET');
-    const iVerify = nav.llamadas.findIndex((l) => l.url.includes('/auth/v1/verify'));
-    assert.ok(iSubida >= 0, `debió intentarse subir lo pendiente; hubo: ${nav.llamadas.map((l) => `${l.metodo} ${l.url}`).join(' | ')}`);
-    assert.ok(iSubida < iVerify, 'lo pendiente se sube ANTES de canjear el token nuevo');
+    // Lo que de verdad importa no es el orden contra `verify`, sino **con qué
+    // sesión** se sube: lo pendiente de Ana tiene que salir con el token de
+    // Ana, mientras el suyo sigue puesto. Si saliera con el de Beto, el
+    // servidor lo rechazaría o —peor— lo guardaría a nombre equivocado.
+    const subida = nav.llamadas.find((l) => l.url.includes('/rest/v1/') && l.metodo !== 'GET');
+    assert.ok(subida, `debió intentarse subir lo pendiente; hubo: ${nav.llamadas.map((l) => `${l.metodo} ${l.url}`).join(' | ')}`);
+    const autorizacion = subida?.cabeceras.authorization ?? '';
+    assert.match(autorizacion, /token-de-prueba/, 'lo pendiente se sube con la sesión de quien se va');
 
     // Y la cartera de quien se fue no se queda para el que llega.
     const estado = JSON.parse((await nav.almacen())[CLAVES.estado] ?? '{}') as { clientes?: unknown[] };
@@ -168,12 +171,14 @@ describe('R5 · ya había una sesión en este navegador', () => {
 describe('R5 · llega cq sin configuración de nube', () => {
   it('lo dice en lugar de fallar en silencio', async () => {
     const nav = await abrirCrm({ fragmento: `cq=${TOKEN}` });
-    await nav.page.waitForTimeout(1_200);
+    // El arranque espera a `entradaLista`, que se resuelve con la animación o
+    // a los 3.5 s; antes de eso no ha corrido nada de lo que se está probando.
+    await nav.page.waitForTimeout(4_500);
 
     const visible = await nav.page.evaluate(() => document.body.innerText);
     const avisado = /Abre el CRM desde Core Quartz/.test(visible) ||
-      /Abre el CRM desde Core Quartz/.test(String(document?.title ?? ''));
-    assert.ok(avisado || nav.dialogos.some((d) => /Abre el CRM desde Core Quartz/.test(d)),
+      nav.dialogos.some((d) => /Abre el CRM desde Core Quartz/.test(d));
+    assert.ok(avisado,
       `debió avisar; se vio: ${visible.slice(0, 200)} · diálogos: ${nav.dialogos.join(' | ')}`);
     assert.equal(nav.llamadas.filter((l) => l.url.includes('/auth/v1/verify')).length, 0,
       'sin dirección de nube no hay a quién preguntarle');
@@ -183,7 +188,7 @@ describe('R5 · llega cq sin configuración de nube', () => {
 describe('Regresión · el enlace de firma del cliente no cambia', () => {
   it('#firmar= sigue abriendo el documento del cliente', async () => {
     const nav = await abrirCrm({ fragmento: 'firmar=abcdef123456' });
-    await nav.page.waitForTimeout(1_200);
+    await nav.page.waitForTimeout(4_500);   // como arriba: la animación de entrada
     assert.deepEqual(nav.errores, []);
     assert.equal(nav.llamadas.filter((l) => l.url.includes('/auth/v1/verify')).length, 0,
       'una firma de cliente no canjea ningún token');

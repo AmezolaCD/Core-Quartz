@@ -41,6 +41,8 @@ export interface LlamadaSupabase {
   metodo: string;
   url: string;
   cuerpo: unknown;
+  /** Cabeceras enviadas; sirven para saber con qué sesión salió la petición. */
+  cabeceras: Record<string, string>;
 }
 
 export interface Navegador {
@@ -163,7 +165,7 @@ export async function abrirCrm(opciones: OpcionesNavegador = {}): Promise<Navega
     const url = peticion.url();
     let cuerpo: unknown = null;
     try { cuerpo = peticion.postDataJSON(); } catch { /* sin cuerpo */ }
-    llamadas.push({ metodo: peticion.method(), url, cuerpo });
+    llamadas.push({ metodo: peticion.method(), url, cuerpo, cabeceras: peticion.headers() });
 
     if (url.includes('/auth/v1/verify')) {
       const v = opciones.verify;
