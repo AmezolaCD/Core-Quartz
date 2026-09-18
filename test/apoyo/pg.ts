@@ -6,7 +6,7 @@
  * Postgres 16 de `docker-compose.test.yml`), así que las mismas pruebas sirven
  * contra el contenedor o contra un Postgres local.
  */
-import { after, before } from 'node:test';
+import { after } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { Pool } from 'pg';
@@ -79,22 +79,37 @@ async function destruir(nombre: string, pool: Pool | null): Promise<void> {
 }
 
 /**
- * Registra los ganchos del archivo de prueba: una base nueva antes de la primera
- * prueba y borrada al final. Devuelve un acceso perezoso al pool.
+ * Base desechable de este archivo de prueba, lista antes de que corra nada.
+ *
+ * La base se crea aquí mismo, con `await` de módulo, y NO en un gancho
+ * `before`: bajo `node --test` la prueba raíz ya empezó cuando se evalúa el
+ * archivo, así que todos los `before` de nivel raíz arrancan a la vez y sin
+ * esperarse entre sí. Con un gancho, la semilla del archivo corría mientras
+ * la base aún no existía. Cada archivo de prueba es su propio proceso, de
+ * modo que sigue siendo una base desechable por archivo.
+ */
+const baseDelArchivo: BaseDesechable = await crearBaseDesechable();
+
+let base: BaseDesechable | null = baseDelArchivo;
+
+// El borrado se registra junto a la creación, no dentro de `baseDePrueba()`:
+// un archivo que sólo importe `hora`, `ID` o `modulos` también crea su base al
+// importar este módulo, y sin este gancho la dejaría colgada en el servidor.
+after(async () => {
+  if (base) await base.destruir();
+  base = null;
+});
+
+const lista = (): BaseDesechable => {
+  if (!base) throw new Error('la base desechable no está lista');
+  return base;
+};
+
+/**
+ * Accesos perezosos a la base desechable del archivo de prueba (ya creada, y
+ * con su borrado registrado al importar este módulo).
  */
 export function baseDePrueba(): { pool: () => Pool; url: () => string; nombre: () => string; aplicadas: () => string[] } {
-  let base: BaseDesechable | null = null;
-  before(async () => {
-    base = await crearBaseDesechable();
-  });
-  after(async () => {
-    if (base) await base.destruir();
-    base = null;
-  });
-  const lista = (): BaseDesechable => {
-    if (!base) throw new Error('la base desechable no está lista');
-    return base;
-  };
   return {
     pool: () => lista().pool,
     url: () => lista().url,

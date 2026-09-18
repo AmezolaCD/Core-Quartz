@@ -50,3 +50,24 @@ constante; `/api/sso/*` responde 404 si la petición no trae el secreto configur
 docker compose -f docker-compose.test.yml up -d pg
 npm run typecheck && npm run test:api
 ```
+
+## Heredado de la fase 02 (revisión)
+
+Puntos que la fase 02 dejó anotados y que se resuelven aquí, porque es donde se
+vuelven alcanzables:
+
+1. **`enTransaccion` con un cliente que no trae transacción abierta corre sin atomicidad**
+   (`src/db/pool.ts`). Un `desactivarUsuario` fallido deja media R6 aplicada. O se abre
+   `BEGIN`/`COMMIT` en esa rama, o la regla de la API es «pasa el pool, o un cliente que ya
+   hayas puesto en transacción» y se hace cumplir. **Con prueba.**
+2. **`lock_timeout` (y `statement_timeout`) en el pool**: el canje y la baja de la misma
+   persona pueden esperarse (bloqueo de llave foránea contra `FOR UPDATE`); sin límite, esa
+   espera queda colgada detrás de una petición HTTP.
+3. El perdedor de una carrera entre R6 y un canje responde `usado` en vez de `inactivo`: el
+   acceso se niega igual, pero el mensaje del CDH es menos exacto.
+4. `revocarSesionesDe` cuenta también sesiones ya vencidas, así que el número de «sesiones
+   revocadas» que ve el administrador sobra.
+5. `emitirBoleto` responde `usuario_inactivo` ante un id desconocido; si los motivos se
+   mapean directo a los dos textos 403 de R2, saldría el mensaje equivocado.
+6. Dos comportamientos correctos pero sin prueba en la rama del *savepoint*: soltarlo al
+   terminar bien, y que la sonda sólo se trague `25P01`.

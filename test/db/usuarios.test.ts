@@ -25,7 +25,8 @@ import {
   revocarSesion,
   revocarSesionesDe,
 } from '../../src/db/repos/sesiones.ts';
-import { RESULTADO_OK, RESULTADO_USUARIO_DESACTIVADO } from '../../src/db/repos/boletos.ts';
+import { RESULTADO_OK, RESULTADO_USUARIO_DESACTIVADO, canjearBoleto } from '../../src/db/repos/boletos.ts';
+import { crearPool } from '../../src/db/pool.ts';
 import { ID, baseDePrueba, columnasQueContienen, hora, sembrarEjemplo, unaFila } from '../apoyo/pg.ts';
 
 const base = baseDePrueba();
@@ -190,6 +191,12 @@ describe('core.sesiones', () => {
       .pool()
       .query(`SELECT 1 FROM core.sesiones WHERE token_hash = $1`, [hashToken(token)]);
     assert.equal(rows.length, 1, 'sólo se guarda el SHA-256');
+  });
+
+  it('el token en claro tampoco queda en core.bitacora', async () => {
+    const { token } = await crearSesion(base.pool(), ID.carla, { ahora: t0 });
+    const columnas = await columnasQueContienen(base.pool(), 'bitacora', token);
+    assert.deepEqual(columnas, [], `el token en claro aparece en core.bitacora: ${columnas.join(', ')}`);
   });
 
   it('acepta una vigencia distinta en horas', async () => {
@@ -408,5 +415,188 @@ describe('R6 · desactivarUsuario', () => {
     const res = await desactivarUsuario(pool, ID.ana, ID.beto);
     assert.equal(res.ok, true);
     assert.equal((await obtenerPorId(pool, ID.ana))?.activo, false);
+  });
+
+  it('la anotación de R6 va dentro de la transacción: si falla, no queda ni la baja ni la bitácora', async () => {
+    const pool = base.pool();
+    const nidia = await personaConTodo('nidia');
+    await pool.query(
+      `CREATE FUNCTION core.prueba_falla_bitacora_r6() RETURNS trigger LANGUAGE plpgsql AS
+       $$ BEGIN RAISE EXCEPTION 'bitácora caída (simulada)'; END $$`,
+    );
+    await pool.query(
+      `CREATE TRIGGER zz_prueba_falla_r6 BEFORE INSERT ON core.bitacora
+       FOR EACH ROW EXECUTE FUNCTION core.prueba_falla_bitacora_r6()`,
+    );
+    try {
+      await assert.rejects(() => desactivarUsuario(pool, nidia.id, ID.ana), 'el fallo de `anotar` debe propagarse');
+    } finally {
+      await pool.query(`DROP TRIGGER zz_prueba_falla_r6 ON core.bitacora`);
+      await pool.query(`DROP FUNCTION core.prueba_falla_bitacora_r6()`);
+    }
+    assert.equal((await obtenerPorId(pool, nidia.id))?.activo, true, 'la baja se deshizo con la transacción');
+    const filas = await listarBitacora(pool, { entidad: ENTIDADES.usuario, entidad_id: nidia.id });
+    assert.deepEqual(
+      filas.filter((f) => f.accion === ACCIONES.usuarioDesactivado),
+      [],
+      'la anotación de la baja tampoco quedó',
+    );
+  });
+});
+
+// ---- R6 e invariante 4 · `actualizarUsuario` no puede saltarse al último administrador ----
+
+describe('R6 · actualizarUsuario y el último administrador', () => {
+  const t2 = hora('14:00:00');
+
+  /** Deja a Ana como única administradora activa (las pruebas anteriores mueven esto). */
+  async function soloAnaAdmin(): Promise<void> {
+    const pool = base.pool();
+    await pool.query(`UPDATE core.usuarios SET es_admin = false WHERE id <> $1::uuid`, [ID.ana]);
+    await pool.query(`UPDATE core.usuarios SET es_admin = true, activo = true WHERE id = $1::uuid`, [ID.ana]);
+    const admins = (await listarUsuarios(pool)).filter((u) => u.es_admin && u.activo);
+    assert.deepEqual(
+      admins.map((u) => u.correo),
+      ['ana@quartz.example'],
+      'la prueba necesita a Ana como única administradora activa',
+    );
+  }
+
+  it('no deja desactivar a la última administradora (mismo rechazo que desactivarUsuario)', async () => {
+    const pool = base.pool();
+    await soloAnaAdmin();
+    // `actualizarUsuario` cambia `activo`, así que también le toca R6: el rechazo
+    // debe tener la forma de `desactivarUsuario` (`ResultadoDesactivacion`).
+    const res: unknown = await actualizarUsuario(pool, ID.ana, { activo: false }, ID.ana);
+    assert.deepEqual(res, { ok: false, motivo: 'ultimo_admin' });
+    assert.equal((await obtenerPorId(pool, ID.ana))?.activo, true, 'Ana sigue activa');
+  });
+
+  it('no deja quitarle es_admin a la última administradora (R6)', async () => {
+    const pool = base.pool();
+    await soloAnaAdmin();
+    const res: unknown = await actualizarUsuario(pool, ID.ana, { es_admin: false }, ID.ana);
+    assert.deepEqual(res, { ok: false, motivo: 'ultimo_admin' });
+    assert.equal((await obtenerPorId(pool, ID.ana))?.es_admin, true, 'Ana sigue siendo administradora');
+  });
+
+  it('desactivar por actualizarUsuario también revoca sesiones y quema boletos (R6)', async () => {
+    const pool = base.pool();
+    await soloAnaAdmin();
+
+    // Nadia es administradora, pero no la última: Ana sigue activa, así que la baja procede.
+    const nadia = randomUUID();
+    await pool.query(
+      `INSERT INTO core.usuarios (id, correo, nombre, es_admin, activo)
+       VALUES ($1, 'nadia@quartz.example', 'Nadia', true, true)`,
+      [nadia],
+    );
+    await pool.query(
+      `INSERT INTO core.accesos (usuario_id, modulo, usuario_modulo, activo) VALUES ($1, 'cdh', 'nadia.op', true)`,
+      [nadia],
+    );
+    for (const token of ['tok-nadia-1', 'tok-nadia-2']) {
+      await insertarSesion(pool, { usuarioId: nadia, token, creada: t2, expira: t2 + 12 * HORA });
+    }
+    const pendiente = await insertarBoleto(pool, {
+      usuarioId: nadia,
+      modulo: 'cdh',
+      usuarioModulo: 'nadia.op',
+      codigo: 'cod-nadia-pendiente',
+      emitido: t2,
+      expira: t2 + 60_000,
+    });
+
+    await actualizarUsuario(pool, nadia, { activo: false }, ID.ana);
+    assert.equal((await obtenerPorId(pool, nadia))?.activo, false, 'Nadia queda inactiva');
+
+    const cuenta = async (sql: string): Promise<number> =>
+      Number((await unaFila<{ n: string }>(pool, sql, [nadia]))?.n ?? -1);
+
+    assert.equal(
+      await cuenta(`SELECT count(*) AS n FROM core.sesiones WHERE usuario_id = $1::uuid AND revocada IS NOT NULL`),
+      2,
+      'sus dos sesiones quedan revocadas, igual que con desactivarUsuario',
+    );
+    assert.equal(
+      await cuenta(`SELECT count(*) AS n FROM core.sesiones WHERE usuario_id = $1::uuid AND revocada IS NULL`),
+      0,
+      'no le queda ninguna sesión viva',
+    );
+    assert.equal(
+      await cuenta(`SELECT count(*) AS n FROM core.boletos WHERE usuario_id = $1::uuid AND canjeado IS NULL`),
+      0,
+      'no le queda ningún boleto pendiente',
+    );
+
+    const fila = await unaFila<{ canjeado: Date | null; resultado: string | null }>(
+      pool,
+      `SELECT canjeado, resultado FROM core.boletos WHERE id = $1`,
+      [pendiente],
+    );
+    assert.notEqual(fila?.canjeado, null, 'su boleto pendiente quedó quemado');
+    assert.equal(fila?.resultado, RESULTADO_USUARIO_DESACTIVADO);
+
+    assert.deepEqual(
+      await canjearBoleto(pool, { codigo: 'cod-nadia-pendiente', moduloQueCanjea: 'cdh', ahora: t2 + 5_000 }),
+      { ok: false, motivo: 'usado' },
+      'un boleto ya quemado no se puede canjear',
+    );
+  });
+});
+
+// ---- R6 e invariante 4 · dos bajas simultáneas no pueden dejar el portal sin administrador ----
+
+describe('R6 · concurrencia del último administrador', () => {
+  it('Ana y Beto se desactivan a la vez: gana una sola y queda un administrador activo', async () => {
+    const pool = base.pool();
+    await pool.query(`UPDATE core.usuarios SET es_admin = false WHERE id <> $1::uuid AND id <> $2::uuid`, [
+      ID.ana,
+      ID.beto,
+    ]);
+    await pool.query(`UPDATE core.usuarios SET es_admin = true, activo = true WHERE id IN ($1::uuid, $2::uuid)`, [
+      ID.ana,
+      ID.beto,
+    ]);
+    const antes = (await listarUsuarios(pool))
+      .filter((u) => u.es_admin && u.activo)
+      .map((u) => u.correo)
+      .sort();
+    assert.deepEqual(antes, ['ana@quartz.example', 'beto@quartz.example'], 'la prueba parte de dos admins activas');
+
+    // Un disparador que tarda al desactivar abre la ventana de la carrera siempre:
+    // las dos transacciones alcanzan a contar las administradoras activas antes
+    // de que cualquiera de las dos confirme su baja.
+    await pool.query(
+      `CREATE FUNCTION core.zz_baja_lenta() RETURNS trigger LANGUAGE plpgsql AS
+       $$ BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $$`,
+    );
+    await pool.query(
+      `CREATE TRIGGER zz_baja_lenta BEFORE UPDATE ON core.usuarios
+       FOR EACH ROW WHEN (old.activo AND NOT new.activo) EXECUTE FUNCTION core.zz_baja_lenta()`,
+    );
+
+    // Dos pools distintos para que las dos transacciones compitan de verdad.
+    const poolA = crearPool(base.url());
+    const poolB = crearPool(base.url());
+    try {
+      await Promise.all([poolA.query('SELECT 1'), poolB.query('SELECT 1')]);
+      const [a, b] = await Promise.all([
+        desactivarUsuario(poolA, ID.ana, ID.ana),
+        desactivarUsuario(poolB, ID.beto, ID.beto),
+      ]);
+      const ambos = [a, b];
+      const buenos = ambos.filter((r) => r.ok);
+      const ultimos = ambos.filter((r) => !r.ok && r.motivo === 'ultimo_admin');
+      assert.equal(buenos.length, 1, `sólo una de las dos puede ganar: ${JSON.stringify(ambos)}`);
+      assert.equal(ultimos.length, 1, `la otra debe ver «ultimo_admin»: ${JSON.stringify(ambos)}`);
+    } finally {
+      await Promise.all([poolA.end().catch(() => undefined), poolB.end().catch(() => undefined)]);
+      await pool.query(`DROP TRIGGER IF EXISTS zz_baja_lenta ON core.usuarios`);
+      await pool.query(`DROP FUNCTION IF EXISTS core.zz_baja_lenta()`);
+    }
+
+    const quedan = (await listarUsuarios(pool)).filter((u) => u.es_admin && u.activo);
+    assert.equal(quedan.length, 1, `el portal se quedó sin administradores activos: ${JSON.stringify(quedan)}`);
   });
 });

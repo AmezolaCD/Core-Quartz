@@ -8,7 +8,14 @@ import type { Pool } from 'pg';
 import { VIGENCIA_BOLETO_MS } from '../../src/nucleo/boletos.ts';
 import { hashToken } from '../../src/nucleo/cripto.ts';
 import { crearPool } from '../../src/db/pool.ts';
-import { RESULTADO_OK, canjearBoleto, emitirBoleto } from '../../src/db/repos/boletos.ts';
+import { randomUUID } from 'node:crypto';
+import {
+  RESULTADO_OK,
+  RESULTADO_USUARIO_DESACTIVADO,
+  canjearBoleto,
+  emitirBoleto,
+} from '../../src/db/repos/boletos.ts';
+import { desactivarUsuario } from '../../src/db/repos/usuarios.ts';
 import { ID, baseDePrueba, columnasQueContienen, hora, sembrarEjemplo, unaFila } from '../apoyo/pg.ts';
 
 const base = baseDePrueba();
@@ -71,6 +78,14 @@ describe('R3 · emitirBoleto', () => {
     const columnas = await columnasQueContienen(pool, 'boletos', codigo);
     assert.deepEqual(columnas, [], `el código en claro aparece en: ${columnas.join(', ')}`);
     assert.notEqual(await leerBoleto(pool, codigo), null, 'sólo se guarda el SHA-256');
+  });
+
+  it('el código en claro tampoco queda en core.bitacora', async () => {
+    const pool = base.pool();
+    const { codigo } = await emitir(pool, ID.carla, 'cdh', t);
+    await canjearBoleto(pool, { codigo, moduloQueCanjea: 'cdh', ahora: hora('10:00:05') });
+    const columnas = await columnasQueContienen(pool, 'bitacora', codigo);
+    assert.deepEqual(columnas, [], `el código en claro aparece en core.bitacora: ${columnas.join(', ')}`);
   });
 
   it('R3: emitir no invalida los boletos anteriores (dos pestañas)', async () => {
@@ -315,5 +330,192 @@ describe('R4 · concurrencia (invariante 3)', () => {
     const fila = await leerBoleto(base.pool(), codigo);
     assert.equal(fila?.canjeado?.getTime(), hora('10:00:05'));
     assert.equal(fila?.resultado, RESULTADO_OK);
+  });
+});
+
+// ---- R4: quemar el boleto y dejar constancia son una sola cosa ----
+
+describe('R4 · el canje y su registro van juntos', () => {
+  const t = hora('11:00:00');
+
+  /** Crea el par función/disparador que hace fallar una escritura, corre el trabajo y lo quita. */
+  async function conDisparadorQueFalla(
+    pool: Pool,
+    nombre: string,
+    tabla: 'core.bitacora' | 'core.boletos',
+    clausula: string,
+    condicion: string,
+    trabajo: () => Promise<void>,
+  ): Promise<void> {
+    await pool.query(
+      `CREATE FUNCTION core.${nombre}() RETURNS trigger LANGUAGE plpgsql AS
+       $$ BEGIN RAISE EXCEPTION 'escritura caída (simulada)'; END $$`,
+    );
+    await pool.query(
+      `CREATE TRIGGER zz_${nombre} ${clausula} ON ${tabla} FOR EACH ROW ${condicion} EXECUTE FUNCTION core.${nombre}()`,
+    );
+    try {
+      await trabajo();
+    } finally {
+      await pool.query(`DROP TRIGGER zz_${nombre} ON ${tabla}`);
+      await pool.query(`DROP FUNCTION core.${nombre}()`);
+    }
+  }
+
+  /** Ningún boleto puede quedar quemado sin su motivo (R4). */
+  async function sinQuemadosSinMotivo(pool: Pool): Promise<void> {
+    const fila = await unaFila<{ n: string }>(
+      pool,
+      `SELECT count(*) AS n FROM core.boletos WHERE canjeado IS NOT NULL AND resultado IS NULL`,
+    );
+    assert.equal(Number(fila?.n), 0, 'quedó un boleto con `canjeado` y `resultado` en NULL');
+  }
+
+  it('si la bitácora falla, el boleto no queda consumido', async () => {
+    const pool = base.pool();
+    // Se emite antes: la emisión también anota en la bitácora.
+    const { codigo } = await emitir(pool, ID.carla, 'cdh', t);
+
+    await conDisparadorQueFalla(
+      pool,
+      'prueba_falla_bitacora_canje',
+      'core.bitacora',
+      'BEFORE INSERT',
+      '',
+      async () => {
+        await assert.rejects(
+          () => canjearBoleto(pool, { codigo, moduloQueCanjea: 'cdh', ahora: hora('11:00:05') }),
+          'el fallo de la bitácora debe propagarse',
+        );
+      },
+    );
+
+    const fila = await leerBoleto(pool, codigo);
+    assert.equal(fila?.canjeado, null, 'sin su anotación, el canje se deshace y el boleto sigue sin consumir');
+    assert.equal(fila?.resultado, null);
+    await sinQuemadosSinMotivo(pool);
+
+    assert.deepEqual(
+      await canjearBoleto(pool, { codigo, moduloQueCanjea: 'cdh', ahora: hora('11:00:10') }),
+      { ok: true, usuario_id: ID.carla, nombre: 'Carla', usuario_modulo: 'carla.ama' },
+      'un canje válido posterior sigue funcionando',
+    );
+  });
+
+  it('nunca queda `canjeado` con `resultado` en NULL', async () => {
+    const pool = base.pool();
+    const { codigo } = await emitir(pool, ID.carla, 'cdh', t);
+
+    // Misma simulación que con la bitácora, pero sobre la escritura del motivo.
+    await conDisparadorQueFalla(
+      pool,
+      'prueba_falla_resultado',
+      'core.boletos',
+      'BEFORE UPDATE',
+      'WHEN (old.resultado IS NULL AND new.resultado IS NOT NULL)',
+      async () => {
+        await assert.rejects(
+          () => canjearBoleto(pool, { codigo, moduloQueCanjea: 'cdh', ahora: hora('11:00:05') }),
+          'el fallo al guardar el motivo debe propagarse',
+        );
+      },
+    );
+
+    await sinQuemadosSinMotivo(pool);
+    const fila = await leerBoleto(pool, codigo);
+    assert.equal(fila?.canjeado, null, 'si el motivo no se pudo guardar, el boleto tampoco queda quemado');
+
+    assert.deepEqual(
+      await canjearBoleto(pool, { codigo, moduloQueCanjea: 'cdh', ahora: hora('11:00:10') }),
+      { ok: true, usuario_id: ID.carla, nombre: 'Carla', usuario_modulo: 'carla.ama' },
+      'un canje válido posterior sigue funcionando',
+    );
+  });
+});
+
+// ---- R4 + R6: canjear y dar de baja a la vez no puede terminar en abrazo mortal ----
+
+describe('R4 y R6 · canje y baja simultáneos', () => {
+  const RONDAS = 25;
+  const t = hora('12:00:00');
+
+  /** Código de Postgres del error (o su texto, si no traía código). */
+  const codigoPg = (error: unknown): string => String((error as { code?: string }).code ?? error);
+
+  /** Persona nueva, con su acceso al CDH y un boleto pendiente recién emitido. */
+  async function personaConBoleto(pool: Pool, n: number): Promise<{ id: string; codigo: string }> {
+    const id = randomUUID();
+    await pool.query(
+      `INSERT INTO core.usuarios (id, correo, nombre, es_admin, activo) VALUES ($1, $2, $3, false, true)`,
+      [id, `abrazo${n}@quartz.example`, `Abrazo ${n}`],
+    );
+    await pool.query(
+      `INSERT INTO core.accesos (usuario_id, modulo, usuario_modulo, activo) VALUES ($1, 'cdh', $2, true)`,
+      [id, `abrazo${n}.op`],
+    );
+    const { codigo } = await emitir(pool, id, 'cdh', t);
+    return { id, codigo };
+  }
+
+  it('el canje y la baja de la misma persona nunca se abrazan (40P01)', async () => {
+    const pool = base.pool();
+
+    // Postgres tarda `deadlock_timeout` (1 s por omisión) en notar cada abrazo
+    // mortal. En la base desechable —y sólo en ella— se baja para que la prueba
+    // no dure medio minuto; no cambia quién se abraza, sólo cuándo se nota.
+    // El nombre lo generó `crearBaseDesechable` (`cq_test_<azar>`).
+    await pool
+      .query(`ALTER DATABASE "${base.nombre()}" SET deadlock_timeout = '40ms'`)
+      .catch(() => undefined);
+
+    // Los pools se abren después del ALTER para que sus sesiones ya lo traigan.
+    const poolCanje = crearPool(base.url());
+    const poolBaja = crearPool(base.url());
+
+    const errores: string[] = [];
+    const parejas: string[] = [];
+    const boletos: string[] = [];
+    try {
+      await Promise.all([poolCanje.query('SELECT 1'), poolBaja.query('SELECT 1')]);
+
+      for (let n = 0; n < RONDAS; n++) {
+        const { id, codigo } = await personaConBoleto(pool, n);
+        const [canje, baja] = await Promise.allSettled([
+          canjearBoleto(poolCanje, { codigo, moduloQueCanjea: 'cdh', ahora: t + 5_000 }),
+          desactivarUsuario(poolBaja, id, ID.ana),
+        ]);
+
+        if (canje.status === 'rejected') errores.push(`ronda ${n} · canje: ${codigoPg(canje.reason)}`);
+        if (baja.status === 'rejected') errores.push(`ronda ${n} · baja: ${codigoPg(baja.reason)}`);
+        if (canje.status === 'rejected' || baja.status === 'rejected') continue;
+
+        // R4 + R6: las únicas parejas legítimas son «gana el canje», «gana la
+        // baja y el canje ve el boleto usado» y «el canje alcanza a ver a la
+        // persona ya inactiva».
+        const motivoCanje = canje.value.ok ? RESULTADO_OK : canje.value.motivo;
+        const legitima =
+          baja.value.ok && (motivoCanje === RESULTADO_OK || motivoCanje === 'usado' || motivoCanje === 'inactivo');
+        if (!legitima) parejas.push(`ronda ${n}: ${JSON.stringify([canje.value, baja.value])}`);
+
+        const fila = await leerBoleto(pool, codigo);
+        const esperado =
+          motivoCanje === 'usado' ? RESULTADO_USUARIO_DESACTIVADO : motivoCanje;
+        if (fila?.canjeado == null || fila?.resultado !== esperado) {
+          boletos.push(`ronda ${n}: canje «${motivoCanje}» dejó ${JSON.stringify(fila)}`);
+        }
+      }
+    } finally {
+      await Promise.all([poolCanje.end().catch(() => undefined), poolBaja.end().catch(() => undefined)]);
+    }
+
+    assert.deepEqual(errores, [], `ninguna de las dos llamadas debe salir con un error crudo de Postgres`);
+    assert.deepEqual(parejas, [], 'el par canje/baja terminó en un estado que no es ninguno de los legítimos');
+    assert.deepEqual(boletos, [], 'todo boleto debe quedar quemado y con su motivo');
+
+    const sueltos = await unaFila<{ n: string }>(
+      pool,
+      `SELECT count(*) AS n FROM core.boletos WHERE canjeado IS NOT NULL AND resultado IS NULL`,
+    );
+    assert.equal(Number(sueltos?.n), 0, 'ningún boleto puede quedar con `canjeado` y `resultado` en NULL');
   });
 });

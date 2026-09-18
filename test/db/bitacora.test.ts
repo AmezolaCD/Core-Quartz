@@ -110,6 +110,26 @@ describe('core.bitacora', () => {
     assert.equal(rows.length, 1, 'la fila sigue ahí');
   });
 
+  it('un disparador rechaza TRUNCATE, con y sin CASCADE', async () => {
+    const pool = base.pool();
+    const fila = await anotar(pool, {
+      quien: null,
+      accion: 'prueba.truncate',
+      entidad: ENTIDADES.usuario,
+      entidad_id: ID.dani,
+    });
+    await assert.rejects(
+      () => pool.query(`TRUNCATE core.bitacora`),
+      'TRUNCATE sobre core.bitacora debe fallar (invariante 8)',
+    );
+    await assert.rejects(
+      () => pool.query(`TRUNCATE core.bitacora CASCADE`),
+      'TRUNCATE … CASCADE tampoco debe pasar',
+    );
+    const { rows } = await pool.query<{ n: string }>(`SELECT n FROM core.bitacora WHERE n = $1`, [fila.n]);
+    assert.equal(rows.length, 1, 'la fila sigue ahí');
+  });
+
   it('con un cliente en transacción se va con el ROLLBACK', async () => {
     const pool = base.pool();
     const cliente = await pool.connect();
