@@ -4,13 +4,20 @@
   "private": true,
   "description": "Core Quartz · portal de entrada única de Quartz Hotel & Spa",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:nucleo": "node --test \"test/nucleo/**/*.test.ts\""
+    "test:nucleo": "node --test \"test/nucleo/**/*.test.ts\"",
+    "test:db": "node --test \"test/db/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }

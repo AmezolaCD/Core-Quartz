@@ -1,0 +1,8 @@
+-- 001_core.sql · esquema `core` de Core Quartz (PRD §6).
+-- MARCADOR DE POSICIÓN: lo escribe la fase de implementación.
+-- Debe crear, sólo dentro del esquema `core` (nunca en `public` ni en `auth`):
+--   core.migraciones, core.usuarios, core.modulos, core.accesos,
+--   core.sesiones, core.boletos, core.bitacora,
+--   el disparador que rechaza UPDATE/DELETE en core.bitacora,
+--   el índice único parcial (modulo, lower(usuario_modulo)) WHERE usuario_modulo IS NOT NULL,
+--   y la semilla de core.modulos ('crm', 'cdh') con url_base desde variables de entorno.
