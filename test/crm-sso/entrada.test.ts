@@ -10,11 +10,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   CLAVES,
-  CRM_REPO,
   NUBE,
   abrirCrm,
   esperarLlamada,
@@ -192,57 +189,5 @@ describe('Regresión · el enlace de firma del cliente no cambia', () => {
     assert.deepEqual(nav.errores, []);
     assert.equal(nav.llamadas.filter((l) => l.url.includes('/auth/v1/verify')).length, 0,
       'una firma de cliente no canjea ningún token');
-  });
-});
-
-describe('vercel.json · las reescrituras del portal y del CDH', () => {
-  const vercel = JSON.parse(readFileSync(join(CRM_REPO, 'vercel.json'), 'utf8')) as {
-    headers?: unknown[];
-    rewrites?: Array<{ source: string; destination: string }>;
-  };
-
-  /**
-   * Traduce el `source` de Vercel a una expresión regular.
-   *
-   * Se hace aquí y no con `path-to-regexp` a propósito: esa biblioteca sólo
-   * está en el árbol como dependencia transitiva de Express y sólo se publica
-   * como ESM, así que depender de ella sería frágil y además añadiría una
-   * dependencia que el PRD §9 pide evitar. La sintaxis que usan estas dos
-   * reglas es la mínima: `:nombre` y `:nombre*`.
-   */
-  const comoRegExp = (source: string): RegExp => {
-    const patron = source
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/:[A-Za-z_]\w*\*/g, '.*')
-      .replace(/:[A-Za-z_]\w*/g, '[^/]+');
-    return new RegExp(`^${patron}$`);
-  };
-
-  it('el archivo sigue siendo JSON válido y conserva la cabecera de caché', () => {
-    assert.ok(Array.isArray(vercel.headers) && vercel.headers.length > 0,
-      'el bloque headers no debe perderse');
-  });
-
-  it('reenvía /portal y /cdh, con y sin barra', () => {
-    const fuentes = (vercel.rewrites ?? []).map((r) => r.source);
-    const alcanza = (ruta: string) => (vercel.rewrites ?? []).some((r) => comoRegExp(r.source).test(ruta));
-
-    assert.ok(fuentes.length >= 4, `faltan reescrituras; hay: ${JSON.stringify(fuentes)}`);
-    for (const ruta of ['/portal', '/portal/', '/portal/api/salud', '/cdh', '/cdh/', '/cdh/api/health']) {
-      assert.ok(alcanza(ruta), `ninguna reescritura alcanza ${ruta}`);
-    }
-  });
-
-  it('no captura la raíz ni el propio index.html: el CRM se queda donde está', () => {
-    const alcanza = (ruta: string) => (vercel.rewrites ?? []).some((r) => comoRegExp(r.source).test(ruta));
-    for (const ruta of ['/', '/index.html', '/manifest.webmanifest', '/plantilla.csv']) {
-      assert.ok(!alcanza(ruta), `la reescritura no debe capturar ${ruta}`);
-    }
-  });
-
-  it('todas apuntan al mismo origen por HTTPS', () => {
-    for (const r of vercel.rewrites ?? []) {
-      assert.match(r.destination, /^https:\/\//, `${r.source} debe reenviar por HTTPS`);
-    }
   });
 });

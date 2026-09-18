@@ -35,3 +35,39 @@ Variables: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVIC
 ```bash
 bash deploy/verificar.sh
 ```
+
+## Heredado de la fase 06 (revisión del 18 sep 2026)
+
+Al llegar al `vercel.json` salió que **el despliegue real no es el que describe el PRD §5**, y eso
+cambia de qué va esta fase. Los hechos, confirmados con Juan y con el README del CDH:
+
+- El **CDH** corre en Docker con **Tailscale**: queda accesible con HTTPS «sólo para los
+  dispositivos de esa red, nunca desde internet».
+- El **shell** todavía no corre en ningún lado.
+- El **CRM** sí está en Vercel, en `core-quartz.vercel.app`, y ahí no cambia nada.
+
+Lo que hay que resolver aquí, antes de escribir un solo `rewrite`:
+
+1. **Las reescrituras de Vercel pueden no tener sentido.** Su edge no alcanza un host de una
+   tailnet, así que `/cdh/*` no puede reenviarse a él. Si el shell también acaba en la red
+   privada, `/portal/*` tampoco, y entonces **no hace falta tocar `vercel.json`**: el CRM se
+   queda solo en Vercel y el portal y el CDH viven en la red privada. Menos piezas, no más.
+
+2. **Los dos enlaces del portal son relativos, y con dominios distintos están rotos.**
+   `enlaceCrm` devuelve `/#nube=…&cq=…` y `enlaceCdh` devuelve `<prefijo>/api/auth/sso?codigo=…`
+   (`src/nucleo/enlaces.ts`). Dan por hecho el mismo dominio. Si el portal no vive en
+   `core-quartz.vercel.app`, el enlace al CRM redirige dentro del propio host del portal y **la
+   entrada al CRM no funciona**. La pieza para arreglarlo ya existe y nadie la usa:
+   `core.modulos.url_base`, que la migración siembra desde `CQ_URL_CRM` y `CQ_URL_CDH`. La
+   propuesta es que los constructores usen esa URL cuando sea absoluta y conserven lo relativo
+   cuando no, con lo que sirve para las dos arquitecturas. Cuesta tocar la prueba de la fase 01
+   que hoy exige que empiecen con `/` y nunca con `http`.
+
+3. **El PRD §5 y §10.2 quedan desactualizados.** El diseño «un solo dominio» —y con él las
+   decisiones #31, #32 y #34, y la separación de cookies por `Path`— se apoya en que las tres
+   aplicaciones compartan origen. Con el CDH en una tailnet eso deja de valer, y conviene
+   corregir el PRD antes que el código.
+
+4. **Qué se mide contra Vercel** (arriba, en el alcance) depende de todo lo anterior: si no hay
+   reescritura, no hay límite de tamaño ni de espera que medir, y la IP del cliente la pone
+   Tailscale o Caddy, no Vercel.
