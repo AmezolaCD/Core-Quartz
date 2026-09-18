@@ -14,13 +14,15 @@
     "test:crm-rls": "node --test \"test/crm-rls/**/*.test.ts\"",
     "test:api": "node --test \"test/api/**/*.test.ts\"",
     "admin:crear": "node src/cli/crear-admin.ts",
-    "iniciar": "node src/index.ts"
+    "iniciar": "node src/index.ts",
+    "test:crm-sso": "node --test \"test/crm-sso/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^22.18.0",
     "@types/pg": "^8.23.1",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.0"
   },
   "dependencies": {
