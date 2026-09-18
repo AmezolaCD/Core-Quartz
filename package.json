@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test:nucleo": "node --test \"test/nucleo/**/*.test.ts\"",
-    "test:db": "node --test \"test/db/**/*.test.ts\""
+    "test:db": "node --test \"test/db/**/*.test.ts\"",
+    "test:crm-rls": "node --test \"test/crm-rls/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
