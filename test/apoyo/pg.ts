@@ -92,10 +92,28 @@ const baseDelArchivo: BaseDesechable = await crearBaseDesechable();
 
 let base: BaseDesechable | null = baseDelArchivo;
 
+/**
+ * Cosas que deben cerrarse **antes** de destruir la base: servidores HTTP que
+ * la estén usando, pools propios, lo que sea.
+ *
+ * Hace falta porque `destruir` hace `DROP DATABASE … WITH (FORCE)`, que mata
+ * las conexiones vivas: quien siguiera consultando recibiría «terminating
+ * connection due to administrator command». Y no basta con que cada archivo
+ * registre su propio `after`, porque los ganchos corren en orden de registro y
+ * éste, al importarse primero, siempre iría antes.
+ */
+const cierresPrevios: Array<() => Promise<void>> = [];
+
+/** Registra un cierre que corre antes de destruir la base del archivo. */
+export function alCerrar(cierre: () => Promise<void>): void {
+  cierresPrevios.push(cierre);
+}
+
 // El borrado se registra junto a la creación, no dentro de `baseDePrueba()`:
 // un archivo que sólo importe `hora`, `ID` o `modulos` también crea su base al
 // importar este módulo, y sin este gancho la dejaría colgada en el servidor.
 after(async () => {
+  for (const cierre of cierresPrevios.splice(0)) await cierre().catch(() => undefined);
   if (base) await base.destruir();
   base = null;
 });

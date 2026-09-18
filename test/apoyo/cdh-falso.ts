@@ -117,6 +117,11 @@ export async function levantarCdhFalso(opciones: OpcionesCdhFalso = {}): Promise
     set caido(valor: boolean) {
       estado.caido = valor;
     },
-    cerrar: () => new Promise<void>((listo) => servidor.close(() => listo())),
+    cerrar: () => {
+      // Igual que el servidor del shell: sin esto, los sockets keep-alive del
+      // cliente mantienen vivo el simulador y el cierre nunca termina.
+      servidor.closeAllConnections();
+      return new Promise<void>((listo) => servidor.close(() => listo()));
+    },
   };
 }

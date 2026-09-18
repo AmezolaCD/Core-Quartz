@@ -133,18 +133,27 @@ describe('R5 · entrada al CRM', () => {
     assert.deepEqual(r.cuerpo, { error: MENSAJES.faltaEnCrm });
   });
 
-  it('un correo marcado como borrado en la lista del CRM no cuenta (R5.2)', async () => {
-    await borrarDeListaCrm(e.pool, 'eva@quartz.example');
+  it('Eva tiene el acceso crm inactivo: 403 sin mirar siquiera la lista del CRM (R1)', async () => {
+    // En la semilla del PRD §7 el acceso `crm` de Eva está inactivo: R1 corta
+    // antes que R5.2, así que el 403 gana al 409.
     const nav = await comoQuien('eva@quartz.example');
     const r = await nav.pedir('GET', `${P}/api/modulos/crm/abrir`);
-    assert.equal(r.estado, 409);
+    assert.equal(r.estado, 403);
+    assert.deepEqual(r.cuerpo, { error: MENSAJES.sinAcceso });
   });
 
-  it('Eva tiene el acceso crm inactivo: 403 antes de mirar la lista del CRM (R1)', async () => {
-    const nav = await comoQuien('eva@quartz.example');
-    const r = await nav.pedir('GET', `${P}/api/modulos/crm/abrir`);
-    // Su acceso `crm` está inactivo en la semilla del PRD §7.
-    assert.ok(r.estado === 403 || r.estado === 409, `estado inesperado ${r.estado}`);
+  it('un correo marcado como borrado en la lista del CRM no cuenta (R5.2)', async () => {
+    // Con el acceso ya activo, lo único que puede fallar es la lista del CRM.
+    await e.pool.query(`UPDATE core.accesos SET activo = true WHERE usuario_id = $1::uuid AND modulo = 'crm'`, [ID.eva]);
+    await borrarDeListaCrm(e.pool, 'eva@quartz.example');
+    try {
+      const nav = await comoQuien('eva@quartz.example');
+      const r = await nav.pedir('GET', `${P}/api/modulos/crm/abrir`);
+      assert.equal(r.estado, 409);
+      assert.deepEqual(r.cuerpo, { error: MENSAJES.faltaEnCrm });
+    } finally {
+      await e.pool.query(`UPDATE core.accesos SET activo = false WHERE usuario_id = $1::uuid AND modulo = 'crm'`, [ID.eva]);
+    }
   });
 
   it('queda constancia en core.boletos con modulo = crm (R5.3)', async () => {

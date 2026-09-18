@@ -6,7 +6,6 @@
  * Nada aquí sustituye módulos: el shell habla con los simuladores por `fetch`,
  * igual que hablaría con los de verdad.
  */
-import { after } from 'node:test';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Pool } from 'pg';
@@ -14,7 +13,7 @@ import { crearApp } from '../../src/app.ts';
 import type { Config } from '../../src/config.ts';
 import { crearClienteSupabase } from '../../src/servicios/supabase-auth.ts';
 import { crearClienteCdh } from '../../src/servicios/cdh-cliente.ts';
-import { baseDePrueba, sembrarEjemplo } from './pg.ts';
+import { alCerrar, baseDePrueba, sembrarEjemplo } from './pg.ts';
 import { levantarSupabaseFalso, type SupabaseFalso } from './supabase-falso.ts';
 import { levantarCdhFalso, type CdhFalso } from './cdh-falso.ts';
 
@@ -22,6 +21,26 @@ export { ID } from './pg.ts';
 
 /** Hora fija de arranque de las pruebas (la misma familia que usa el núcleo). */
 export const HORA_CERO: number = Date.parse('2026-09-16T10:00:00Z');
+
+/**
+ * Entornos levantados por este archivo de prueba, para cerrarlos al final.
+ *
+ * Dos cosas que costaron encontrarse:
+ *
+ * 1. El registro va **al importar el módulo**, no dentro de `levantarEntorno`:
+ *    bajo `node --test`, un `after()` llamado mientras corre un `before()` se
+ *    engancha a ese `before` y corre en cuanto termina, así que el servidor se
+ *    cerraba antes de la primera prueba.
+ * 2. Y va por `alCerrar` de `pg.ts`, no por un `after()` propio, porque los
+ *    ganchos corren en orden de registro: `pg.ts` se importa antes y su
+ *    `DROP DATABASE … WITH (FORCE)` mataba las conexiones mientras los
+ *    servidores seguían arriba.
+ */
+const abiertos: Entorno[] = [];
+
+alCerrar(async () => {
+  for (const entorno of abiertos.splice(0)) await entorno.cerrar();
+});
 
 export interface Respuesta {
   estado: number;
@@ -237,12 +256,16 @@ export async function levantarEntorno(opciones: OpcionesEntorno = {}): Promise<E
     pedir,
     navegador,
     async cerrar() {
+      // `close()` por sí solo espera a los sockets que `fetch` deja abiertos
+      // con keep-alive, así que el cierre puede quedarse colgado y el gancho
+      // `after` acaba reportándose como una prueba más que falló.
+      servidor.closeAllConnections();
       await new Promise<void>((listo) => servidor.close(() => listo()));
       await supabase.cerrar();
       await cdh.cerrar();
     },
   };
 
-  after(() => entorno.cerrar());
+  abiertos.push(entorno);
   return entorno;
 }

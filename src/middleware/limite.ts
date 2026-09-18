@@ -7,7 +7,7 @@
  * parámetro, igual que en el núcleo: nada aquí lee el reloj.
  */
 
-/** Intentos permitidos por ventana (PRD §4 de la fase). */
+/** Intentos permitidos por ventana. */
 export const MAXIMO_INTENTOS = 10;
 
 /** Ventana del límite: 15 minutos. */
@@ -25,6 +25,32 @@ export interface OpcionesLimite {
   ventanaMs?: number;
 }
 
-export function crearLimite(_opciones: OpcionesLimite = {}): Limite {
-  throw new Error('no implementado: crearLimite');
+export function crearLimite(opciones: OpcionesLimite = {}): Limite {
+  const maximo = opciones.maximo ?? MAXIMO_INTENTOS;
+  const ventanaMs = opciones.ventanaMs ?? VENTANA_MS;
+  const cuentas = new Map<string, { desde: number; intentos: number }>();
+
+  /** Tira las ventanas ya vencidas para que el mapa no crezca sin fin. */
+  const limpiar = (ahora: number): void => {
+    if (cuentas.size < 1000) return;
+    for (const [clave, cuenta] of cuentas) {
+      if (ahora - cuenta.desde >= ventanaMs) cuentas.delete(clave);
+    }
+  };
+
+  return {
+    admite(clave, ahora) {
+      limpiar(ahora);
+      const cuenta = cuentas.get(clave);
+      if (!cuenta || ahora - cuenta.desde >= ventanaMs) {
+        cuentas.set(clave, { desde: ahora, intentos: 1 });
+        return true;
+      }
+      cuenta.intentos += 1;
+      return cuenta.intentos <= maximo;
+    },
+    olvidar(clave) {
+      cuentas.delete(clave);
+    },
+  };
 }

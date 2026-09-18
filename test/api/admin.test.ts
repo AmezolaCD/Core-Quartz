@@ -157,6 +157,9 @@ describe('R6 · desactivar a una persona', () => {
     assert.equal(await activo(ID.beto), false);
     assert.equal(e.supabase.cuentas.get('beto@quartz.example')?.bloqueada, true);
     assert.equal((await beto.pedir('GET', `${P}/api/auth/yo`)).estado, 401);
+
+    // Se devuelve a Beto como estaba: ninguna prueba debe depender del orden.
+    await ana.pedir('PATCH', `${P}/api/admin/usuarios/${ID.beto}`, { cuerpo: { activo: true } });
   });
 
   it('reactivar quita el bloqueo pero no revive sesiones viejas', async () => {
@@ -167,6 +170,7 @@ describe('R6 · desactivar a una persona', () => {
     assert.equal(alta.estado, 200);
     assert.equal(e.supabase.cuentas.get('beto@quartz.example')?.bloqueada, false);
     assert.equal((await e.pedir('GET', `${P}/api/auth/yo`, { cookie })).estado, 401);
+    assert.equal(await activo(ID.beto), true);
   });
 
   it('la baja revoca sus sesiones del CDH', async () => {

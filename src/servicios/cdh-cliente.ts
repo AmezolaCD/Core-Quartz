@@ -28,6 +28,46 @@ export interface OpcionesCdh {
   buscar?: typeof fetch;
 }
 
-export function crearClienteCdh(_opciones: OpcionesCdh): ClienteCdh {
-  throw new Error('no implementado: crearClienteCdh');
+/** El CDH guarda `active` como 0/1 en SQLite; también se acepta un booleano. */
+function comoActivo(valor: unknown): boolean {
+  return valor === 1 || valor === true || valor === '1';
+}
+
+export function crearClienteCdh(opciones: OpcionesCdh): ClienteCdh {
+  const buscar = opciones.buscar ?? fetch;
+  const base = opciones.interno.replace(/\/+$/, '');
+  const cabeceras = (): Record<string, string> => ({
+    'content-type': 'application/json',
+    'x-cq-secreto': opciones.secreto,
+  });
+
+  return {
+    async usuario(username) {
+      const respuesta = await buscar(`${base}/api/auth/sso/usuario/${encodeURIComponent(username)}`, {
+        method: 'GET',
+        headers: cabeceras(),
+      });
+      if (respuesta.status === 404) return null;
+      if (!respuesta.ok) throw new Error(`El CDH respondió ${respuesta.status} al consultar el usuario.`);
+      const datos = (await respuesta.json()) as { username?: string; active?: unknown };
+      return { username: datos.username ?? username, activo: comoActivo(datos.active) };
+    },
+
+    async revocar(usuarioModulo) {
+      // R6 y decisión #24: quitar acceso nunca depende de que el CDH esté
+      // arriba, así que un fallo se devuelve, no se lanza.
+      try {
+        const respuesta = await buscar(`${base}/api/auth/sso/revocar`, {
+          method: 'POST',
+          headers: cabeceras(),
+          body: JSON.stringify({ usuario_modulo: usuarioModulo }),
+        });
+        if (!respuesta.ok) return { ok: false, error: `el CDH respondió ${respuesta.status}` };
+        const datos = (await respuesta.json()) as { revocadas?: number };
+        return { ok: true, revocadas: datos.revocadas ?? 0 };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
 }

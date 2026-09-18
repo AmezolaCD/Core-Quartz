@@ -145,6 +145,11 @@ export async function levantarSupabaseFalso(): Promise<SupabaseFalso> {
     get ultimoTokenHash() {
       return estado.ultimoTokenHash;
     },
-    cerrar: () => new Promise<void>((listo) => servidor.close(() => listo())),
+    cerrar: () => {
+      // Igual que el servidor del shell: sin esto, los sockets keep-alive del
+      // cliente mantienen vivo el simulador y el cierre nunca termina.
+      servidor.closeAllConnections();
+      return new Promise<void>((listo) => servidor.close(() => listo()));
+    },
   };
 }
