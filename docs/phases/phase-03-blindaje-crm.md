@@ -31,7 +31,10 @@ se entrega el SQL y una nota con la condición previa del PRD §7-R8.
 - CRM: `index.html` (sólo `revisarPermisos` / `pantallaPermisos`)
 - CRM: `ROLES.md` (sección «Cuentas que no son de ventas»)
 - shell: `test/apoyo/supabase-simulado.sql`
+- shell: `test/crm-rls/apoyo-crm.ts` (carga los `.sql` reales del CRM y el juego de datos común)
 - shell: `test/crm-rls/roles.test.ts`
+- shell: `test/crm-rls/firmas.test.ts` (buzón de firmas; ampliación aprobada)
+- shell: `test/crm-rls/diagnostico.test.ts` (pantalla «¿Por qué no veo algo?» del `index.html` real)
 - shell: `package.json` (script `test:crm-rls`, variable `CRM_REPO` con la ruta al clon del CRM)
 
 ## Criterios de aceptación
