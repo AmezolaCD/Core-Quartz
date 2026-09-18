@@ -21,8 +21,8 @@
  *
  * Variables de entorno:
  *   CRM_REPO      ruta al clon del CRM            (por omisión `../CRM-VENTAS-`)
- *   CRM_REF_BASE  referencia git de la línea base (por omisión, la primera de
- *                 `main`, `origin/main`, `origin/HEAD`, `HEAD` que exista)
+ *   CRM_REF_BASE  referencia git de la línea base (por omisión, el commit fijo
+ *                 `BASE_PUBLICADA`; ver la nota de `refBase()`)
  *   DATABASE_URL_TEST  Postgres de pruebas, nunca Supabase (PRD §9)
  *
  * Corre con:
@@ -31,284 +31,43 @@
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import pg from 'pg';
+import {
+  ANA,
+  BETO,
+  BETO_MAYUSCULAS,
+  CARLA,
+  CATA,
+  CLAVE_V_BETO,
+  DE_BETO,
+  DE_CATA,
+  DORA,
+  ELSA,
+  GABY,
+  HUECO_DE_CARLA,
+  REF_BASE,
+  SEMILLA,
+  TODO,
+  baseCruda,
+  baseDelCRM,
+  bitacoraQueVe,
+  buzonQueVe,
+  como,
+  conClave,
+  deshacerCompleto,
+  deshacerDocumentado,
+  editaConAndamio,
+  intentaEditar,
+  intentaInsertar,
+  intentaMarcarAplicada,
+  loQueVe,
+  rolDe,
+  rolesSql,
+  sembrar,
+  sembrarBuzon,
+  sqlDelArbol,
+} from './apoyo-crm.ts';
+import type { Base } from './apoyo-crm.ts';
 
-// ---------------------------------------------------------------------------
-// Dónde está cada cosa
-// ---------------------------------------------------------------------------
-
-const AQUI = path.dirname(fileURLToPath(import.meta.url));
-const RAIZ = path.resolve(AQUI, '..', '..');
-
-/** Clon del CRM del que se leen los `.sql` reales. */
-const CRM = path.resolve(RAIZ, process.env.CRM_REPO ?? '../CRM-VENTAS-');
-
-/**
- * Postgres de pruebas. Se repite aquí en vez de importarlo de `test/apoyo/pg.ts`
- * a propósito: ese módulo crea su base y le corre las migraciones del esquema
- * `core` al importarlo, y estas pruebas necesitan justo lo contrario, una base
- * con el esquema del CRM y sin nada del portal.
- */
-const URL_PRUEBAS = process.env.DATABASE_URL_TEST ?? 'postgres://postgres@127.0.0.1:54329/postgres';
-
-const NOMBRE_VALIDO = /^cq_test_[0-9a-f]{12}$/;
-
-const SIMULADO = readFileSync(path.join(RAIZ, 'test', 'apoyo', 'supabase-simulado.sql'), 'utf8');
-
-// ---------------------------------------------------------------------------
-// Leer el SQL del CRM
-// ---------------------------------------------------------------------------
-
-function git(...args: string[]): string {
-  return execFileSync('git', ['-C', CRM, ...args], { encoding: 'utf8' });
-}
-
-function existeRef(ref: string): boolean {
-  try {
-    git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Referencia de la línea base: el `roles.sql` «de antes».
- *
- * El PRD la nombra `main`; el CRM puede no tenerla (hoy su rama por omisión es
- * otra), así que se cae hacia la que sí exista y se deja dicho cuál se usó.
- */
-function refBase(): string {
-  const pedida = process.env.CRM_REF_BASE;
-  if (pedida !== undefined && pedida !== '') {
-    assert.ok(existeRef(pedida), `CRM_REF_BASE=${pedida} no existe en ${CRM}`);
-    return pedida;
-  }
-  const candidatas = ['main', 'origin/main', 'origin/HEAD', 'HEAD'];
-  const hallada = candidatas.find(existeRef);
-  assert.ok(hallada, `ninguna de ${candidatas.join(', ')} existe en ${CRM}`);
-  return hallada;
-}
-
-const REF_BASE = refBase();
-
-/** El archivo tal como está commiteado en la línea base. */
-function sqlCommiteado(archivo: string): string {
-  return git('show', `${REF_BASE}:${archivo}`);
-}
-
-/** El archivo tal como está en el árbol de trabajo del CRM. */
-function sqlDelArbol(archivo: string): string {
-  return readFileSync(path.join(CRM, archivo), 'utf8');
-}
-
-type Variante = 'antes' | 'despues';
-
-/** `roles.sql` de cada variante; lo demás siempre sale del árbol de trabajo. */
-function rolesSql(variante: Variante): string {
-  return variante === 'antes' ? sqlCommiteado('roles.sql') : sqlDelArbol('roles.sql');
-}
-
-// ---------------------------------------------------------------------------
-// El juego de datos (uno solo, para que los conteos se puedan comparar)
-// ---------------------------------------------------------------------------
-
-/** Clave de firma del convenio de Beto, para las pruebas de `firmas.sql`. */
-const CLAVE_V_BETO = 'clave-de-beto';
-
-interface Fila {
-  id: string;
-  tipo: string;
-  datos: Record<string, unknown>;
-  duenio: string | null;
-}
-
-/**
- * Las cuatro personas de la lista del CRM (una por papel) y la cartera mínima
- * que hace visible cada rama de las políticas. Carla **no** está en la lista a
- * propósito: es la cuenta de sólo-CDH del PRD §7, y es el caso de R8.
- */
-const SEMILLA: Fila[] = [
-  { id: 'usuarios:ana', tipo: 'usuarios', datos: { correo: 'ana@quartz.example', nombre: 'Ana', rol: 'admin' }, duenio: null },
-  { id: 'usuarios:gaby', tipo: 'usuarios', datos: { correo: 'gaby@quartz.example', nombre: 'Gaby', rol: 'gerente' }, duenio: null },
-  { id: 'usuarios:beto', tipo: 'usuarios', datos: { correo: 'beto@quartz.example', nombre: 'Beto', rol: 'ejecutivo' }, duenio: null },
-  { id: 'usuarios:cata', tipo: 'usuarios', datos: { correo: 'cata@quartz.example', nombre: 'Cata', rol: 'captura' }, duenio: null },
-  { id: 'ajustes:global', tipo: 'ajustes', datos: { moneda: 'MXN' }, duenio: null },
-  { id: 'habitaciones:h1', tipo: 'habitaciones', datos: { nombre: 'Suite' }, duenio: null },
-  { id: 'clientes:c-beto', tipo: 'clientes', datos: { nombre: 'Cliente de Beto' }, duenio: 'Beto' },
-  { id: 'clientes:c-gaby', tipo: 'clientes', datos: { nombre: 'Cliente de Gaby' }, duenio: 'Gaby' },
-  { id: 'clientes:c-sin', tipo: 'clientes', datos: { nombre: 'Cliente sin dueño' }, duenio: null },
-  { id: 'prospectos:p-cata', tipo: 'prospectos', datos: { nombre: 'Prospecto de Cata' }, duenio: 'Cata' },
-  { id: 'prospectos:p-beto', tipo: 'prospectos', datos: { nombre: 'Prospecto de Beto' }, duenio: 'Beto' },
-  { id: 'convenios:v-beto', tipo: 'convenios', datos: { nombre: 'Convenio de Beto', tokenFirma: CLAVE_V_BETO }, duenio: 'Beto' },
-];
-
-const TODO = SEMILLA.map((f) => f.id).sort();
-
-/** Lo que todo el equipo necesita para armar un convenio (`roles.sql` §3). */
-const CATALOGO = ['ajustes:global', 'habitaciones:h1', 'usuarios:ana', 'usuarios:beto', 'usuarios:cata', 'usuarios:gaby'];
-
-/** Lo que ve un ejecutivo llamado Beto: el catálogo, lo suyo y lo que no tiene dueño. */
-const DE_BETO = [...CATALOGO, 'clientes:c-beto', 'clientes:c-sin', 'convenios:v-beto', 'prospectos:p-beto'].sort();
-
-/** `captura` (Banquetes): sus prospectos y nada más que ajustes y la lista de gente. */
-const DE_CATA = ['ajustes:global', 'usuarios:ana', 'usuarios:beto', 'usuarios:cata', 'usuarios:gaby', 'prospectos:p-cata'].sort();
-
-/** El hueco de R8: una cuenta fuera de la lista cae en el `ejecutivo` por omisión. */
-const HUECO_DE_CARLA = [...CATALOGO, 'clientes:c-sin'].sort();
-
-// ---------------------------------------------------------------------------
-// Bases desechables
-// ---------------------------------------------------------------------------
-
-interface Base {
-  nombre: string;
-  pool: pg.Pool;
-  destruir: () => Promise<void>;
-}
-
-async function conAdmin<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
-  const cliente = new pg.Client({ connectionString: URL_PRUEBAS });
-  await cliente.connect();
-  try {
-    return await fn(cliente);
-  } finally {
-    await cliente.end();
-  }
-}
-
-function urlDeBase(nombre: string): string {
-  const u = new URL(URL_PRUEBAS);
-  u.pathname = `/${nombre}`;
-  return u.toString();
-}
-
-async function destruir(nombre: string, pool: pg.Pool | null): Promise<void> {
-  if (!NOMBRE_VALIDO.test(nombre)) throw new Error(`no se borra una base ajena: ${nombre}`);
-  if (pool) await pool.end().catch(() => undefined);
-  await conAdmin((c) => c.query(`DROP DATABASE IF EXISTS "${nombre}" WITH (FORCE)`));
-}
-
-/** Base vacía con el Supabase simulado ya cargado. */
-async function baseCruda(): Promise<Base> {
-  const nombre = `cq_test_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-  if (!NOMBRE_VALIDO.test(nombre)) throw new Error(`nombre de base inesperado: ${nombre}`);
-  await conAdmin((c) => c.query(`CREATE DATABASE "${nombre}"`));
-
-  let pool: pg.Pool | null = null;
-  try {
-    pool = new pg.Pool({ connectionString: urlDeBase(nombre), max: 8 });
-    await pool.query(SIMULADO);
-    const suyo = pool;
-    return { nombre, pool: suyo, destruir: () => destruir(nombre, suyo) };
-  } catch (error) {
-    await destruir(nombre, pool);
-    throw error;
-  }
-}
-
-/** Carga el CRM en el orden en que se corre de verdad y siembra el juego de datos. */
-async function baseDelCRM(variante: Variante): Promise<Base> {
-  const base = await baseCruda();
-  try {
-    await base.pool.query(sqlDelArbol('nube.sql'));
-    await base.pool.query(rolesSql(variante));
-    await base.pool.query(sqlDelArbol('firmas.sql'));
-    for (const f of SEMILLA) {
-      await base.pool.query(
-        `INSERT INTO public.crm_datos (id, tipo, datos, duenio) VALUES ($1, $2, $3::jsonb, $4)`,
-        [f.id, f.tipo, JSON.stringify(f.datos), f.duenio],
-      );
-    }
-    return base;
-  } catch (error) {
-    await base.destruir();
-    throw error;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Consultar como lo haría el navegador
-// ---------------------------------------------------------------------------
-
-interface Actor {
-  /** El rol de Postgres con el que PostgREST atendería la petición. */
-  rol: 'anon' | 'authenticated';
-  /** Correo del token; sin correo, no hay sesión. */
-  correo?: string;
-  /** Encabezados de la petición (`firmas.sql` lee `x-firma-token` de aquí). */
-  encabezados?: Record<string, string>;
-}
-
-const ANA: Actor = { rol: 'authenticated', correo: 'ana@quartz.example' };
-const GABY: Actor = { rol: 'authenticated', correo: 'gaby@quartz.example' };
-const BETO: Actor = { rol: 'authenticated', correo: 'beto@quartz.example' };
-const CATA: Actor = { rol: 'authenticated', correo: 'cata@quartz.example' };
-/** Carla sólo tiene CDH: su correo no está en la lista de usuarios del CRM. */
-const CARLA: Actor = { rol: 'authenticated', correo: 'carla@quartz.example' };
-
-/**
- * Corre `fn` dentro de una transacción con el token, los encabezados y el rol
- * del actor, y la deshace siempre: ninguna prueba se escribe encima de otra.
- */
-async function como<T>(base: Base, actor: Actor, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
-  const c = await base.pool.connect();
-  try {
-    await c.query('BEGIN');
-    const token = actor.correo === undefined ? {} : { email: actor.correo, role: actor.rol };
-    await c.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify(token)]);
-    await c.query(`SELECT set_config('request.headers', $1, true)`, [JSON.stringify(actor.encabezados ?? {})]);
-    await c.query(`SET LOCAL ROLE ${actor.rol}`);
-    return await fn(c);
-  } finally {
-    await c.query('ROLLBACK').catch(() => undefined);
-    c.release();
-  }
-}
-
-/** Los ids de `crm_datos` que ese actor alcanza a ver, ordenados. */
-async function loQueVe(base: Base, actor: Actor): Promise<string[]> {
-  return como(base, actor, async (c) => {
-    const { rows } = await c.query<{ id: string }>(`SELECT id FROM public.crm_datos ORDER BY id`);
-    return rows.map((r) => r.id);
-  });
-}
-
-/** Cuántas filas de la bitácora alcanza a ver. */
-async function bitacoraQueVe(base: Base, actor: Actor): Promise<number> {
-  return como(base, actor, async (c) => {
-    const { rows } = await c.query<{ n: string }>(`SELECT count(*) AS n FROM public.crm_bitacora`);
-    return Number(rows[0]?.n ?? 0);
-  });
-}
-
-/** Intenta insertar un cliente nuevo. Devuelve `null` si pasó, o el mensaje si lo rechazaron. */
-async function intentaInsertar(base: Base, actor: Actor, tipo = 'clientes'): Promise<string | null> {
-  return como(base, actor, async (c) => {
-    try {
-      await c.query(`INSERT INTO public.crm_datos (id, tipo, datos) VALUES ($1, $2, '{}'::jsonb)`, [
-        `${tipo}:colado-${randomUUID().slice(0, 8)}`,
-        tipo,
-      ]);
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
-  });
-}
-
-/** Cuántas filas alcanzó a modificar un UPDATE. Con la política en contra, cero. */
-async function intentaEditar(base: Base, actor: Actor, id: string): Promise<number> {
-  return como(base, actor, async (c) => {
-    const r = await c.query(`UPDATE public.crm_datos SET datos = datos || '{"tocado":true}'::jsonb WHERE id = $1`, [id]);
-    return r.rowCount ?? 0;
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Las dos bases, una por variante
@@ -347,15 +106,13 @@ describe(`R8 · antes (roles.sql de ${REF_BASE})`, () => {
   });
 
   it('Carla (fuera de la lista) cae en el ejecutivo por omisión: ve catálogo, usuarios y lo sin dueño', async () => {
-    assert.equal(
-      await como(antes, CARLA, async (c) => {
-        const { rows } = await c.query<{ rol: string }>(`SELECT public.crm_rol() AS rol`);
-        return rows[0]?.rol;
-      }),
-      'ejecutivo',
-      'este es el hueco que cierra la fase 03',
-    );
+    assert.equal(await rolDe(antes, CARLA), 'ejecutivo', 'este es el hueco que cierra la fase 03');
     assert.deepEqual(await loQueVe(antes, CARLA), HUECO_DE_CARLA);
+  });
+
+  it('Dora (en la lista pero dada de baja) cae en el mismo hueco', async () => {
+    assert.equal(await rolDe(antes, DORA), 'ejecutivo', 'su fila dice admin, pero está borrada: no cuenta');
+    assert.deepEqual(await loQueVe(antes, DORA), HUECO_DE_CARLA);
   });
 
   it('Carla, además, puede escribir', async () => {
@@ -370,11 +127,11 @@ describe(`R8 · antes (roles.sql de ${REF_BASE})`, () => {
 
 describe('R8 · después (roles.sql del árbol de trabajo del CRM)', () => {
   it('Carla queda en el papel `ninguno`', async () => {
-    const rol = await como(despues, CARLA, async (c) => {
-      const { rows } = await c.query<{ rol: string }>(`SELECT public.crm_rol() AS rol`);
-      return rows[0]?.rol;
-    });
-    assert.equal(rol, 'ninguno', 'crm_rol() debe devolver `ninguno` cuando el correo no está en la lista');
+    assert.equal(
+      await rolDe(despues, CARLA),
+      'ninguno',
+      'crm_rol() debe devolver `ninguno` cuando el correo no está en la lista',
+    );
   });
 
   it('Carla no lee nada: cero filas de cualquier tipo', async () => {
@@ -395,12 +152,61 @@ describe('R8 · después (roles.sql del árbol de trabajo del CRM)', () => {
     assert.equal(await intentaEditar(despues, CARLA, 'ajustes:global'), 0);
   });
 
-  it('Beto, Ana, Gaby y Cata ven exactamente lo mismo que antes', async () => {
+  // Las dos que siguen son la mitad de «update rechazado» de verdad: con el
+  // andamio, la política de lectura ya no tapa a `edita`, y cada una mira una
+  // de sus dos cláusulas. Ver la nota de los andamios, más arriba.
+
+  it('el `using` de `edita` frena a Carla por sí solo, sin ayuda de la política de lectura', async () => {
+    const intento = await editaConAndamio(despues, CARLA, 'clientes:c-sin', 'lectura');
+    assert.equal(
+      intento.error,
+      null,
+      'con la fila a la vista, el `using` de `edita` debe dejarla fuera antes de llegar al `with check`',
+    );
+    assert.equal(intento.filas, 0, 'el `using` de `edita` tiene que descartar la fila para el papel `ninguno`');
+  });
+
+  it('el `with check` de `edita` también frena a Carla por sí solo', async () => {
+    const intento = await editaConAndamio(despues, CARLA, 'clientes:c-sin', 'escritura');
+    assert.equal(intento.filas, null, 'con el `using` apartado, el `with check` de `edita` tiene que rechazar');
+    assert.match(String(intento.error), /row-level security/i);
+  });
+
+  it('el andamio sí deja pasar a quien le toca (si no, las dos de arriba probarían el andamio)', async () => {
+    const suyo = await editaConAndamio(despues, BETO, 'clientes:c-beto', 'lectura');
+    assert.deepEqual(suyo, { filas: 1, error: null }, 'Beto edita lo suyo con el andamio puesto');
+    const ajeno = await editaConAndamio(despues, BETO, 'clientes:c-gaby', 'lectura');
+    assert.deepEqual(ajeno, { filas: 0, error: null }, 'y el `using` de `edita` le sigue negando la cartera de Gaby');
+  });
+
+  it('Dora, dada de baja de la lista, queda en `ninguno` y no lee nada', async () => {
+    assert.equal(
+      await rolDe(despues, DORA),
+      'ninguno',
+      'crm_yo() sólo mira la lista viva: una fila con borrado = true no da papel, ni aunque diga admin',
+    );
+    assert.deepEqual(await loQueVe(despues, DORA), [], 'una cuenta dada de baja lee 0 filas de crm_datos');
+    assert.equal(await bitacoraQueVe(despues, DORA), 0);
+    assert.match(String(await intentaInsertar(despues, DORA)), /row-level security/i);
+  });
+
+  it('el correo no distingue mayúsculas: token en MAYÚSCULAS contra lista en minúsculas', async () => {
+    assert.equal(await rolDe(despues, BETO_MAYUSCULAS), 'ejecutivo', 'BETO@QUARTZ.EXAMPLE es el mismo Beto de la lista');
+    assert.deepEqual(await loQueVe(despues, BETO_MAYUSCULAS), DE_BETO, 'y ve exactamente lo mismo que Beto');
+  });
+
+  it('el correo no distingue mayúsculas: token en minúsculas contra lista en MAYÚSCULAS', async () => {
+    assert.equal(await rolDe(despues, ELSA), 'gerente', 'la fila de Elsa trae el correo capturado con mayúsculas');
+    assert.deepEqual(await loQueVe(despues, ELSA), TODO, 'y como gerente ve todo');
+  });
+
+  it('Beto, Ana, Gaby, Cata y Elsa ven exactamente lo mismo que antes', async () => {
     for (const [quien, actor] of [
       ['Beto', BETO],
       ['Ana', ANA],
       ['Gaby', GABY],
       ['Cata', CATA],
+      ['Elsa', ELSA],
     ] as const) {
       assert.deepEqual(await loQueVe(despues, actor), await loQueVe(antes, actor), `${quien} no debe notar el cambio`);
     }
@@ -434,8 +240,6 @@ describe('R8 · después (roles.sql del árbol de trabajo del CRM)', () => {
 // ---------------------------------------------------------------------------
 
 describe('firmas.sql · el cliente sin cuenta sigue firmando', () => {
-  const conClave = (clave: string): Actor => ({ rol: 'anon', encabezados: { 'x-firma-token': clave } });
-
   for (const [variante, base] of [
     ['antes', antes],
     ['después', despues],
@@ -493,5 +297,223 @@ describe('nube.sql → roles.sql → firmas.sql', () => {
     } finally {
       await base.destruir();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El deshacer que promete roles.sql §5
+//
+// La sección «5. Para deshacer» del archivo dice, en comentarios, qué correr
+// para volver a como estaba —«todos ven todo»— si el blindaje estorba en
+// producción. Eso es una promesa de ida y vuelta, y aquí se ejecuta tal cual
+// está escrita en el archivo: las líneas no se copian a la prueba, se leen de
+// `roles.sql`. Si alguien renombra una política y se le olvida el comentario,
+// esto truena.
+// ---------------------------------------------------------------------------
+
+/** Las políticas que quedan sobre las dos tablas del CRM, ordenadas. */
+async function politicas(base: Base): Promise<string[]> {
+  const { rows } = await base.pool.query<{ policyname: string }>(
+    `SELECT policyname FROM pg_policies
+      WHERE schemaname = 'public' AND tablename IN ('crm_datos', 'crm_bitacora')
+      ORDER BY policyname`,
+  );
+  return rows.map((r) => r.policyname);
+}
+
+describe('roles.sql · el deshacer de §5 devuelve el CRM a como estaba', () => {
+  it('documenta el deshacer de las cuatro políticas que crea', async () => {
+    const lineas = deshacerDocumentado(rolesSql('despues'));
+    assert.equal(lineas.length, 4, `roles.sql crea cuatro políticas; §5 documenta ${lineas.length}`);
+    for (const nombre of ['lee lo suyo', 'inserta', 'edita', 'gerencia lee bitacora']) {
+      assert.ok(
+        lineas.some((l) => l.includes(`"${nombre}"`)),
+        `§5 no dice cómo tirar la política "${nombre}"`,
+      );
+    }
+  });
+
+  it('tras correr el deshacer y nube.sql otra vez, todos vuelven a ver todo', async () => {
+    const base = await baseCruda();
+    try {
+      await base.pool.query(sqlDelArbol('nube.sql'));
+      await base.pool.query(rolesSql('despues'));
+      await base.pool.query(sqlDelArbol('firmas.sql'));
+      await sembrar(base);
+
+      // Punto de partida: el blindaje puesto.
+      assert.deepEqual(await loQueVe(base, CARLA), [], 'antes de deshacer, Carla no ve nada');
+
+      // Una firma pendiente en el buzón, para ver si vuelve con el resto.
+      const firma = await sembrarBuzon(base);
+      assert.deepEqual(await buzonQueVe(base, CARLA), [], 'antes de deshacer, Carla tampoco ve el buzón');
+
+      // El deshacer, tal como lo dice el archivo, y nube.sql otra vez. Se corre
+      // `deshacerCompleto` y no sólo las líneas `drop policy`: si §5 documenta
+      // soltar algo más, aquí se suelta también.
+      for (const linea of deshacerCompleto(rolesSql('despues'))) await base.pool.query(linea);
+      await base.pool.query(sqlDelArbol('nube.sql'));
+
+      assert.deepEqual(
+        await politicas(base),
+        ['cliente lee su convenio', 'equipo edita', 'equipo inserta', 'equipo lee', 'equipo lee bitacora'],
+        'no debe quedar ni una política de roles.sql, y sí las de nube.sql y firmas.sql',
+      );
+
+      for (const [quien, actor] of [
+        ['Ana', ANA],
+        ['Gaby', GABY],
+        ['Beto', BETO],
+        ['Cata', CATA],
+        ['Carla', CARLA],
+        ['Dora', DORA],
+      ] as const) {
+        assert.deepEqual(await loQueVe(base, actor), TODO, `${quien} debe volver a ver todo`);
+        assert.ok((await bitacoraQueVe(base, actor)) > 0, `${quien} debe volver a leer la bitácora`);
+      }
+
+      assert.equal(await intentaInsertar(base, CARLA), null, 'y Carla vuelve a poder insertar');
+      assert.equal(await intentaEditar(base, CARLA, 'clientes:c-sin'), 1, 'y a poder editar');
+
+      // Y el buzón de firmas también. Las políticas de `firmas.sql` preguntan
+      // el papel por `crm_del_equipo()`, así que mientras `crm_rol()` siga viva
+      // el deshacer las deja contestando «ninguno» y el buzón se queda cerrado
+      // para todo el equipo, en silencio: `buscarFirmasAhora` lee cero
+      // pendientes y no reporta nada.
+      for (const [quien, actor] of [
+        ['Ana', ANA],
+        ['Beto', BETO],
+        ['Cata', CATA],
+        ['Carla', CARLA],
+      ] as const) {
+        assert.equal((await buzonQueVe(base, actor)).length, 1, `${quien} debe volver a leer el buzón de firmas`);
+        assert.equal(
+          (await intentaMarcarAplicada(base, actor, firma)).filas,
+          1,
+          `${quien} debe volver a poder marcar la firma como aplicada`,
+        );
+      }
+
+      // firmas.sql no se toca al deshacer: el cliente sin cuenta sigue igual.
+      assert.deepEqual(
+        await loQueVe(base, { rol: 'anon', encabezados: { 'x-firma-token': CLAVE_V_BETO } }),
+        ['convenios:v-beto'],
+        'la firma anónima no depende de roles.sql',
+      );
+    } finally {
+      await base.destruir();
+    }
+  });
+
+  // El escenario que reprodujo la revisión, y el que de verdad se va a dar: si
+  // la lista de usuarios nunca llegó a la nube, `roles.sql` deja a TODO el
+  // mundo en `ninguno` y nadie ve nada. El administrador corre el deshacer para
+  // salir del apuro; `crm_datos` vuelve, y el buzón no, sin un solo aviso.
+  it('el deshacer también devuelve el buzón cuando la lista de usuarios nunca llegó a la nube', async () => {
+    const base = await baseCruda();
+    try {
+      await base.pool.query(sqlDelArbol('nube.sql'));
+      await base.pool.query(rolesSql('despues'));
+      await base.pool.query(sqlDelArbol('firmas.sql'));
+
+      // Una nube a medio subir: catálogo y cartera, sin la lista de usuarios.
+      const subidas = SEMILLA.filter((x) => x.tipo !== 'usuarios' && x.tipo !== 'prospectos');
+      for (const f of subidas) {
+        await base.pool.query(
+          `INSERT INTO public.crm_datos (id, tipo, datos, duenio, borrado) VALUES ($1, $2, $3::jsonb, $4, $5)`,
+          [f.id, f.tipo, JSON.stringify(f.datos), f.duenio, f.borrado ?? false],
+        );
+      }
+      const firma = await sembrarBuzon(base);
+
+      // De entrada, nadie es nadie: ni Ana, la administradora.
+      assert.equal(await rolDe(base, ANA), 'ninguno', 'sin lista de usuarios, todos caen en `ninguno`');
+      assert.deepEqual(await loQueVe(base, ANA), [], 'y no ve una sola fila');
+      assert.deepEqual(await buzonQueVe(base, ANA), [], 'ni el buzón');
+
+      for (const linea of deshacerCompleto(rolesSql('despues'))) await base.pool.query(linea);
+      await base.pool.query(sqlDelArbol('nube.sql'));
+
+      for (const [quien, actor] of [
+        ['Ana', ANA],
+        ['Beto', BETO],
+      ] as const) {
+        assert.equal(
+          (await loQueVe(base, actor)).length,
+          subidas.length,
+          `${quien} recupera los registros de crm_datos`,
+        );
+        assert.equal(
+          (await buzonQueVe(base, actor)).length,
+          1,
+          `${quien} tiene que recuperar también el buzón: si no, el CRM deja de recoger firmas y nadie se entera`,
+        );
+        assert.equal((await intentaMarcarAplicada(base, actor, firma)).filas, 1, `${quien} vuelve a marcar la firma`);
+      }
+    } finally {
+      await base.destruir();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Un correo repetido en la lista
+//
+// `crm_yo()` resuelve con `limit 1` y sin `order by`: con dos filas para el
+// mismo correo, cuál gana lo decide el plan —el orden físico de la tabla—, y
+// entre un papel y otro va de «ve todo» a «no ve nada». Da igual cuál de las
+// dos se elija; lo que no puede ser es que dependa de por dónde entró el
+// planificador.
+// ---------------------------------------------------------------------------
+
+const CORREO_REPETIDO = 'repetida@quartz.example';
+
+/** Siembra las dos filas del correo repetido en el orden pedido y pregunta el papel. */
+async function rolConOrden(base: Base, primero: 'admin' | 'captura'): Promise<{ rol: string; ve: number }> {
+  const filas =
+    primero === 'admin'
+      ? [
+          ['usuarios:rep-a', 'admin'],
+          ['usuarios:rep-b', 'captura'],
+        ]
+      : [
+          ['usuarios:rep-b', 'captura'],
+          ['usuarios:rep-a', 'admin'],
+        ];
+  const c = await despues.pool.connect();
+  try {
+    await c.query('BEGIN');
+    for (const [id, rol] of filas) {
+      await c.query(`INSERT INTO public.crm_datos (id, tipo, datos) VALUES ($1, 'usuarios', $2::jsonb)`, [
+        id,
+        JSON.stringify({ correo: CORREO_REPETIDO, nombre: 'Repetida', rol }),
+      ]);
+    }
+    await c.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify({ email: CORREO_REPETIDO, role: 'authenticated' }),
+    ]);
+    await c.query(`SELECT set_config('request.headers', '{}', true)`);
+    await c.query(`SET LOCAL ROLE authenticated`);
+    const { rows } = await c.query<{ rol: string }>(`SELECT public.crm_rol() AS rol`);
+    const vistas = await c.query<{ n: string }>(`SELECT count(*)::int AS n FROM public.crm_datos`);
+    return { rol: rows[0]?.rol ?? '', ve: Number(vistas.rows[0]?.n ?? 0) };
+  } finally {
+    await c.query('ROLLBACK').catch(() => undefined);
+    c.release();
+  }
+}
+
+describe('roles.sql · crm_yo() con un correo repetido en la lista', () => {
+  it('resuelve siempre lo mismo, sin importar en qué orden se capturaron las dos filas', async () => {
+    const a = await rolConOrden(despues, 'admin');
+    const b = await rolConOrden(despues, 'captura');
+    assert.equal(
+      a.rol,
+      b.rol,
+      `crm_yo() elige con \`limit 1\` y sin \`order by\`: capturada primero la fila de admin da ` +
+        `\`${a.rol}\` (ve ${a.ve} filas) y capturada al revés da \`${b.rol}\` (ve ${b.ve}). ` +
+        `Cuál gane da igual, pero tiene que ser siempre la misma.`,
+    );
+    assert.equal(a.ve, b.ve, 'y por lo tanto tiene que ver siempre lo mismo');
   });
 });
