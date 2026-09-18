@@ -12,16 +12,50 @@ export type Ejecutor = Pool | PoolClient;
 
 let pordefecto: Pool | null = null;
 
+/**
+ * Cuánto se espera un bloqueo antes de rendirse.
+ *
+ * El canje de un boleto y la baja de esa misma persona se pelean la misma
+ * fila: el canje pide la llave ajena de `core.usuarios` mientras la baja la
+ * tiene tomada con `FOR UPDATE`. Sin límite, esa espera se queda colgada
+ * detrás de una petición HTTP y el navegador se queda mirando. Con límite,
+ * Postgres devuelve `55P03` y la petición falla rápido, que es mejor.
+ */
+export const LOCK_TIMEOUT_MS = 5_000;
+
+/** Techo de cualquier consulta: nada del portal debería tardar tanto. */
+export const STATEMENT_TIMEOUT_MS = 15_000;
+
+export interface OpcionesPool {
+  /** Espera máxima por un bloqueo (`0` lo desactiva). */
+  lockTimeoutMs?: number;
+  /** Duración máxima de una consulta (`0` lo desactiva). */
+  statementTimeoutMs?: number;
+  max?: number;
+}
+
+/**
+ * Los tiempos límite van como parámetros de arranque de la conexión y no con
+ * un `SET` después de conectarse: así valen desde la primera consulta de cada
+ * conexión nueva del pool, sin carrera posible.
+ */
+function opcionesDeArranque(opciones: OpcionesPool): string {
+  const lock = opciones.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+  const statement = opciones.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS;
+  return `-c lock_timeout=${Math.trunc(lock)} -c statement_timeout=${Math.trunc(statement)}`;
+}
+
 /** Crea un pool nuevo. Sin `url` toma `DATABASE_URL` del entorno. */
-export function crearPool(url?: string): Pool {
+export function crearPool(url?: string, opciones: OpcionesPool = {}): Pool {
   const cadena = url ?? process.env.DATABASE_URL;
   if (!cadena) throw new Error('Falta DATABASE_URL: no hay a qué Postgres conectarse.');
   const config: PoolConfig = {
     connectionString: cadena,
-    max: 10,
+    max: opciones.max ?? 10,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
     application_name: 'core-quartz',
+    options: opcionesDeArranque(opciones),
   };
   return new pg.Pool(config);
 }
@@ -47,13 +81,19 @@ export function esCliente(ejecutor: Ejecutor): ejecutor is PoolClient {
 /** Nombre fijo del punto de guardado (nunca sale de aquí: jamás es texto ajeno). */
 const PUNTO = 'cq_punto';
 
-/** Abre un punto de guardado; `false` si el cliente no venía en transacción. */
+/**
+ * Abre un punto de guardado; `false` si el cliente no venía en transacción.
+ *
+ * Sólo se traga `25P01` («no hay transacción abierta»), que es la respuesta
+ * que estamos sondeando. Cualquier otro error —la conexión se cayó, por
+ * ejemplo— sigue subiendo: tragárselo convertiría una falla real en una
+ * ejecución sin protección.
+ */
 async function abrirPunto(cliente: PoolClient): Promise<boolean> {
   try {
     await cliente.query(`SAVEPOINT ${PUNTO}`);
     return true;
   } catch (error) {
-    // 25P01: no hay transacción abierta, así que no hay nada que proteger.
     if ((error as { code?: string } | null)?.code === '25P01') return false;
     throw error;
   }
@@ -70,15 +110,33 @@ async function abrirPunto(cliente: PoolClient): Promise<boolean> {
 export async function enTransaccion<T>(ejecutor: Ejecutor, trabajo: (cliente: Ejecutor) => Promise<T>): Promise<T> {
   if (esCliente(ejecutor)) {
     const punto = await abrirPunto(ejecutor);
-    try {
-      const resultado = await trabajo(ejecutor);
-      if (punto) await ejecutor.query(`RELEASE SAVEPOINT ${PUNTO}`);
-      return resultado;
-    } catch (error) {
-      if (punto) {
+
+    if (punto) {
+      // Venía en transacción ajena: se respeta y se protege con el punto de
+      // guardado, para que un fallo aquí no aborte lo que llevaba quien llama.
+      try {
+        const resultado = await trabajo(ejecutor);
+        await ejecutor.query(`RELEASE SAVEPOINT ${PUNTO}`);
+        return resultado;
+      } catch (error) {
         await ejecutor.query(`ROLLBACK TO SAVEPOINT ${PUNTO}`).catch(() => undefined);
         await ejecutor.query(`RELEASE SAVEPOINT ${PUNTO}`).catch(() => undefined);
+        throw error;
       }
+    }
+
+    // El cliente no traía transacción: se abre una propia sobre él. Antes esta
+    // rama corría suelta, así que un `desactivarUsuario` a medias dejaba media
+    // R6 aplicada —la persona inactiva pero sus sesiones vivas—, que es justo
+    // lo que la transacción existe para impedir. El cliente no se suelta: es
+    // de quien llama.
+    await ejecutor.query('BEGIN');
+    try {
+      const resultado = await trabajo(ejecutor);
+      await ejecutor.query('COMMIT');
+      return resultado;
+    } catch (error) {
+      await ejecutor.query('ROLLBACK').catch(() => undefined);
       throw error;
     }
   }

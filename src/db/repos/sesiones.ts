@@ -130,8 +130,12 @@ export async function revocarSesion(pool: Ejecutor, token: string, ahora: Instan
 async function revocarVivasDe(ejecutor: Ejecutor, usuarioId: string, ahora?: Instante): Promise<number> {
   const cuando = ahora === undefined ? 'now()' : enMs(2);
   const valores = ahora === undefined ? [usuarioId] : [usuarioId, ahora];
+  // «Viva» es sin revocar **y** sin vencer: una sesión que ya caducó no se
+  // revoca porque no hay nada que cortar, y sobre todo no se cuenta, que si no
+  // el número de «sesiones revocadas» que ve el administrador sale inflado.
   const { rowCount } = await ejecutor.query(
-    `UPDATE core.sesiones SET revocada = ${cuando} WHERE usuario_id = $1::uuid AND revocada IS NULL`,
+    `UPDATE core.sesiones SET revocada = ${cuando}
+      WHERE usuario_id = $1::uuid AND revocada IS NULL AND expira >= ${cuando}`,
     valores,
   );
   const revocadas = rowCount ?? 0;

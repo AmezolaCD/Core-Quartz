@@ -19,8 +19,19 @@ import { levantarCdhFalso, type CdhFalso } from './cdh-falso.ts';
 
 export { ID } from './pg.ts';
 
-/** Hora fija de arranque de las pruebas (la misma familia que usa el núcleo). */
-export const HORA_CERO: number = Date.parse('2026-09-16T10:00:00Z');
+/**
+ * Hora de arranque del reloj controlado de las pruebas.
+ *
+ * Va anclada al reloj **real** y no a una fecha fija, porque el sistema usa dos
+ * relojes a la vez y tienen que coincidir: las sesiones y los boletos se crean
+ * con este reloj inyectado, pero R6 sella su hora con el `now()` de Postgres
+ * (PRD §6). Con una fecha fija de hace días, toda sesión nacía ya vencida para
+ * el servidor y la baja no encontraba nada que revocar.
+ *
+ * Las pruebas se mueven en desplazamientos relativos (`HORA_CERO + 5_000`), así
+ * que nada depende de la fecha concreta.
+ */
+export const HORA_CERO: number = Date.now();
 
 /**
  * Entornos levantados por este archivo de prueba, para cerrarlos al final.
