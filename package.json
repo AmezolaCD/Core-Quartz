@@ -11,14 +11,21 @@
     "typecheck": "tsc --noEmit",
     "test:nucleo": "node --test \"test/nucleo/**/*.test.ts\"",
     "test:db": "node --test \"test/db/**/*.test.ts\"",
-    "test:crm-rls": "node --test \"test/crm-rls/**/*.test.ts\""
+    "test:crm-rls": "node --test \"test/crm-rls/**/*.test.ts\"",
+    "test:api": "node --test \"test/api/**/*.test.ts\"",
+    "admin:crear": "node src/cli/crear-admin.ts",
+    "iniciar": "node src/index.ts"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.18.0",
     "@types/pg": "^8.23.1",
     "typescript": "^5.9.0"
   },
   "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
     "pg": "^8.23.0"
   }
 }

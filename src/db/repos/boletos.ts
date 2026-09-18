@@ -36,10 +36,20 @@ export interface DatosEmision {
   ip?: string | null;
 }
 
+/**
+ * Motivos por los que no se emite un boleto.
+ *
+ * Son los de R1 más `usuario_desconocido`: un id que no existe no es lo mismo
+ * que una persona desactivada, y si los motivos se mapean a los dos textos 403
+ * de R2 saldría el mensaje equivocado («Tu cuenta está desactivada» a quien
+ * nunca tuvo cuenta).
+ */
+export type MotivoEmision = MotivoNoEntra | 'usuario_desconocido';
+
 /** R3: el código en claro se devuelve **una sola vez**; en la base queda su hash. */
 export type ResultadoEmision =
   | { ok: true; codigo: string; expira: Instante }
-  | { ok: false; motivo: MotivoNoEntra };
+  | { ok: false; motivo: MotivoEmision };
 
 /** Se canjea por código en claro o por su hash (el CDH manda el código). */
 export interface DatosCanje {
@@ -126,7 +136,7 @@ export async function emitirBoleto(pool: Ejecutor, datos: DatosEmision): Promise
   const usuario: Usuario | null = usuarios[0] ?? null;
   // Sin módulo no hay nada que revisar; sin persona tampoco se abre nada.
   if (!modulo) return { ok: false, motivo: 'modulo_desconocido' };
-  if (!usuario) return { ok: false, motivo: 'usuario_inactivo' };
+  if (!usuario) return { ok: false, motivo: 'usuario_desconocido' };
 
   const { rows: accesos } = await pool.query<FilaAcceso>(
     `SELECT usuario_id, modulo, usuario_modulo, activo FROM core.accesos
@@ -203,11 +213,17 @@ async function canjeEnTransaccion(
   const fila = rows[0];
   if (!fila) {
     // No se quemó nada: o alguien más llegó primero, o el código no existe.
-    const { rows: existe } = await pool.query<{ id: string }>(
-      `SELECT id FROM core.boletos WHERE codigo_hash = $1`,
+    const { rows: existe } = await pool.query<{ id: string; resultado: string | null }>(
+      `SELECT id, resultado FROM core.boletos WHERE codigo_hash = $1`,
       [hash],
     );
-    return { ok: false, motivo: existe[0] ? 'usado' : 'desconocido' };
+    const previo = existe[0];
+    if (!previo) return { ok: false, motivo: 'desconocido' };
+    // Si quien llegó primero fue la baja de esa persona (R6), el motivo exacto
+    // es que ya no tiene acceso, no que el boleto se haya gastado: el CDH
+    // merece el mensaje correcto aunque en los dos casos se le niegue el paso.
+    if (previo.resultado === RESULTADO_USUARIO_DESACTIVADO) return { ok: false, motivo: 'inactivo' };
+    return { ok: false, motivo: 'usado' };
   }
 
   const boleto: Boleto = {

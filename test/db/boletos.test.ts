@@ -498,9 +498,14 @@ describe('R4 y R6 · canje y baja simultáneos', () => {
         if (!legitima) parejas.push(`ronda ${n}: ${JSON.stringify([canje.value, baja.value])}`);
 
         const fila = await leerBoleto(pool, codigo);
+        // Un canje que responde «inactivo» pudo quemar el boleto él mismo
+        // —y entonces el motivo guardado es «inactivo»— o encontrarlo ya
+        // quemado por la baja, que lo marca «usuario_desactivado». Las dos
+        // son legítimas: el motivo que ve el CDH es el exacto en ambos casos,
+        // y la fila recuerda quién lo quemó.
         const esperado =
-          motivoCanje === 'usado' ? RESULTADO_USUARIO_DESACTIVADO : motivoCanje;
-        if (fila?.canjeado == null || fila?.resultado !== esperado) {
+          motivoCanje === 'inactivo' ? ['inactivo', RESULTADO_USUARIO_DESACTIVADO] : [motivoCanje];
+        if (fila?.canjeado == null || !esperado.includes(fila?.resultado ?? '')) {
           boletos.push(`ronda ${n}: canje «${motivoCanje}» dejó ${JSON.stringify(fila)}`);
         }
       }

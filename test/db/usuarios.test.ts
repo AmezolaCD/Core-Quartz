@@ -290,8 +290,13 @@ describe('R6 · desactivarUsuario', () => {
       [id, `${nombre}.op`],
     );
     const tokens: [string, string] = [`tok-${nombre}-1`, `tok-${nombre}-2`];
+    // Las sesiones se anclan al reloj **real** y no a `t1`: quien decide si
+    // siguen vivas es el servidor con su `now()` (R6 no recibe ninguna hora),
+    // así que unas fechas fijas de hace días serían sesiones ya vencidas y la
+    // baja no tendría nada que revocar.
+    const desde = Date.now();
     for (const token of tokens) {
-      await insertarSesion(pool, { usuarioId: id, token, creada: t1, expira: t1 + 12 * HORA });
+      await insertarSesion(pool, { usuarioId: id, token, creada: desde, expira: desde + 12 * HORA });
     }
     const pendiente = await insertarBoleto(pool, {
       usuarioId: id,
@@ -495,8 +500,11 @@ describe('R6 · actualizarUsuario y el último administrador', () => {
       `INSERT INTO core.accesos (usuario_id, modulo, usuario_modulo, activo) VALUES ($1, 'cdh', 'nadia.op', true)`,
       [nadia],
     );
+    // Igual que en `personaConTodo`: las sesiones se anclan al reloj real,
+    // porque la baja las juzga con el `now()` del servidor.
+    const desde = Date.now();
     for (const token of ['tok-nadia-1', 'tok-nadia-2']) {
-      await insertarSesion(pool, { usuarioId: nadia, token, creada: t2, expira: t2 + 12 * HORA });
+      await insertarSesion(pool, { usuarioId: nadia, token, creada: desde, expira: desde + 12 * HORA });
     }
     const pendiente = await insertarBoleto(pool, {
       usuarioId: nadia,
@@ -537,10 +545,13 @@ describe('R6 · actualizarUsuario y el último administrador', () => {
     assert.notEqual(fila?.canjeado, null, 'su boleto pendiente quedó quemado');
     assert.equal(fila?.resultado, RESULTADO_USUARIO_DESACTIVADO);
 
+    // Quemado por la baja, así que el motivo exacto es «inactivo» y no «usado»:
+    // el boleto no se gastó, se le retiró el acceso a esa persona. Al CDH le
+    // sirve la diferencia aunque en los dos casos se le niegue el paso.
     assert.deepEqual(
       await canjearBoleto(pool, { codigo: 'cod-nadia-pendiente', moduloQueCanjea: 'cdh', ahora: t2 + 5_000 }),
-      { ok: false, motivo: 'usado' },
-      'un boleto ya quemado no se puede canjear',
+      { ok: false, motivo: 'inactivo' },
+      'un boleto quemado por la baja se rechaza con el motivo de la baja',
     );
   });
 });
