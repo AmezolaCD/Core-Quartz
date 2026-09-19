@@ -13,6 +13,7 @@ import { crearApp } from '../../src/app.ts';
 import type { Config } from '../../src/config.ts';
 import { crearClienteSupabase } from '../../src/servicios/supabase-auth.ts';
 import { crearClienteCdh } from '../../src/servicios/cdh-cliente.ts';
+import { crearPool } from '../../src/db/pool.ts';
 import { alCerrar, baseDePrueba, sembrarEjemplo } from './pg.ts';
 import { levantarSupabaseFalso, type SupabaseFalso } from './supabase-falso.ts';
 import { levantarCdhFalso, type CdhFalso } from './cdh-falso.ts';
@@ -166,7 +167,12 @@ export function atributosDeCookie(cookies: string[], nombre: string): string | n
 
 export async function levantarEntorno(opciones: OpcionesEntorno = {}): Promise<Entorno> {
   const basePath = opciones.basePath ?? '/portal';
-  const pool = baseDePrueba().pool();
+  // Pool **propio**, no el de `pg.ts`: quien lo abre lo cierra, y lo cierra
+  // antes de que la base desechable desaparezca. Compartir el de `pg.ts`
+  // dejaba el cierre en manos de otro módulo y alguna conexión llegaba viva
+  // al `DROP DATABASE … WITH (FORCE)`, que la mata con «terminating connection
+  // due to administrator command» y tumba la corrida entera.
+  const pool = crearPool(baseDePrueba().url());
   if (opciones.sembrar !== false) await sembrarEjemplo(pool);
 
   const supabase = await levantarSupabaseFalso();
@@ -267,13 +273,17 @@ export async function levantarEntorno(opciones: OpcionesEntorno = {}): Promise<E
     pedir,
     navegador,
     async cerrar() {
-      // `close()` por sí solo espera a los sockets que `fetch` deja abiertos
-      // con keep-alive, así que el cierre puede quedarse colgado y el gancho
-      // `after` acaba reportándose como una prueba más que falló.
-      servidor.closeAllConnections();
-      await new Promise<void>((listo) => servidor.close(() => listo()));
+      // Orden a propósito: primero se deja de aceptar peticiones, luego se
+      // sueltan los sockets que `fetch` mantiene con keep-alive —sin eso el
+      // cierre se cuelga—, y sólo al final el pool, cuando ya nadie puede
+      // pedirle una consulta más.
+      await new Promise<void>((listo) => {
+        servidor.close(() => listo());
+        servidor.closeAllConnections();
+      });
       await supabase.cerrar();
       await cdh.cerrar();
+      await pool.end().catch(() => undefined);
     },
   };
 
