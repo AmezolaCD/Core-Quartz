@@ -72,10 +72,44 @@ export async function crearBaseDesechable(): Promise<BaseDesechable> {
   }
 }
 
+/**
+ * Espera a que los backends de `nombre` desaparezcan de verdad del servidor.
+ *
+ * `pool.end()` resuelve cuando el cliente ha mandado su `Terminate` y cerrado
+ * el socket, **no** cuando Postgres ya enterró el proceso del otro lado. En esa
+ * rendija de milisegundos el backend sigue listado en `pg_stat_activity`, y el
+ * `DROP DATABASE … WITH (FORCE)` de abajo le manda `SIGTERM`: el backend
+ * alcanza a escribir un «terminating connection due to administrator command»
+ * en un socket que el cliente todavía está leyendo, `pg` lo emite como `error`
+ * sobre un cliente que ya nadie escucha, y `node --test` lo cobra como
+ * «asynchronous activity after the test ended» en el `before` que abrió la
+ * conexión. Fallaba una de cada diez corridas de `test:api`, siempre con todas
+ * las pruebas en verde y el archivo en rojo.
+ *
+ * Así que primero se espera, y sólo se fuerza si alguien no se va.
+ */
+async function esperarSinConexiones(cliente: pg.Client, nombre: string, msTope = 5_000): Promise<number> {
+  const limite = Date.now() + msTope;
+  for (;;) {
+    const { rows } = await cliente.query<{ n: string }>(
+      `SELECT count(*) AS n FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [nombre],
+    );
+    const quedan = Number(rows[0]?.n ?? 0);
+    if (quedan === 0 || Date.now() >= limite) return quedan;
+    await new Promise((sigue) => setTimeout(sigue, 10));
+  }
+}
+
 async function destruir(nombre: string, pool: Pool | null): Promise<void> {
   if (!NOMBRE_VALIDO.test(nombre)) throw new Error(`no se borra una base ajena: ${nombre}`);
   if (pool) await pool.end().catch(() => undefined);
-  await conAdmin((c) => c.query(`DROP DATABASE IF EXISTS "${nombre}" WITH (FORCE)`));
+  await conAdmin(async (c) => {
+    await esperarSinConexiones(c, nombre);
+    // `FORCE` se queda como red: si algo no se fue en cinco segundos, la base
+    // desechable se borra igual. Lo que ya no pasa es forzar por costumbre.
+    await c.query(`DROP DATABASE IF EXISTS "${nombre}" WITH (FORCE)`);
+  });
 }
 
 /**
