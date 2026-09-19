@@ -17,11 +17,17 @@
  */
 import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readdir } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { ID, SECRETOS_DE_PRUEBA, levantarEntorno, sembrarListaCrm, type Entorno } from '../apoyo/app.ts';
 import { alCerrar } from '../apoyo/pg.ts';
 
 const CONTRASENA = 'contraseña-de-prueba';
+
+/** Carpeta del portal, para barrer todo lo que se sirve. */
+const RAIZ_PUBLICA = fileURLToPath(new URL('../../public/', import.meta.url));
 
 /** Textos que el PRD fija palabra por palabra. */
 const TEXTOS = {
@@ -110,6 +116,31 @@ async function almacenamiento(page: Page): Promise<{ local: number; sesion: numb
 }
 
 /**
+ * Controles cuyo objetivo táctil no llega a 44 px de alto.
+ *
+ * Una casilla de 20 px no cuenta como fallo si su etiqueta la envuelve: lo que
+ * se pulsa entonces es la etiqueta. Se ignora lo que está fuera de la pantalla,
+ * como el enlace de «Saltar al contenido», que sólo aparece al enfocarlo.
+ */
+async function objetivosPequenos(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const MINIMO = 44;
+    const chicos: string[] = [];
+    for (const control of document.querySelectorAll('a[href], button, input, select, textarea')) {
+      const el = control as HTMLElement;
+      if (el instanceof HTMLInputElement && el.type === 'hidden') continue;
+      const marco = el.getBoundingClientRect();
+      if (marco.width === 0 && marco.height === 0) continue;
+      if (marco.right <= 0 || marco.bottom <= 0) continue;
+      const esCasilla = el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio');
+      const alto = esCasilla ? (el.closest('label')?.getBoundingClientRect().height ?? marco.height) : marco.height;
+      if (alto < MINIMO) chicos.push(`${el.outerHTML.slice(0, 80)} → ${Math.round(alto)}px`);
+    }
+    return chicos;
+  });
+}
+
+/**
  * Controles sin nombre accesible. Se calcula en la página, con la cadena que
  * usa un lector de pantalla: `aria-label`, `aria-labelledby`, la etiqueta
  * asociada, `title`, o el texto del propio control cuando es un botón o enlace.
@@ -161,9 +192,10 @@ describe('la página del portal se sirve', () => {
   it('el HTML y el JS servidos no traen ningún secreto', async () => {
     // Invariante §5: el repo del shell es público y estos archivos van al
     // navegador tal cual. Se revisa lo que de verdad sale por HTTP.
-    const inicio = await e.pedir('GET', '/portal/');
-    const rutas = [...inicio.texto.matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)].map((m) => m[1] ?? '');
-    assert.ok(rutas.length > 0, 'la página no enlaza ningún archivo propio');
+    const rutas = (await readdir(RAIZ_PUBLICA, { recursive: true, withFileTypes: true }))
+      .filter((entrada) => entrada.isFile())
+      .map((entrada) => relative(RAIZ_PUBLICA, join(entrada.parentPath, entrada.name)).split(sep).join('/'));
+    assert.ok(rutas.length > 0, 'no hay nada que servir en public/');
 
     const prohibidos = [
       SECRETOS_DE_PRUEBA.serviceRole,
@@ -221,8 +253,8 @@ describe('R1 · el inicio', () => {
   it('Ana es admin y ve el inicio con sus dos módulos', async () => {
     const { page } = await abrir();
     await entrarAlPortal(page, 'ana@quartz.example');
-    await page.getByRole('link', { name: 'CRM' }).waitFor();
-    await page.getByRole('link', { name: 'Control de habitaciones' }).waitFor();
+    await page.getByRole('link', { name: 'CRM de Ventas' }).waitFor();
+    await page.getByRole('link', { name: 'Control de Detalles por Habitación' }).waitFor();
   });
 
   it('Ana ve el enlace de Administración; Carla no', async () => {
@@ -297,7 +329,7 @@ describe('entrada directa al único módulo', () => {
       const { page } = await abrir();
       await entrarAlPortal(page, 'ana@quartz.example');
       await page.getByRole('link', { name: 'Administración' }).waitFor();
-      await page.getByRole('link', { name: 'Control de habitaciones' }).waitFor();
+      await page.getByRole('link', { name: 'Control de Detalles por Habitación' }).waitFor();
     } finally {
       await e.pool.query(
         `UPDATE core.accesos SET activo = true WHERE usuario_id = $1::uuid AND modulo = 'crm'`,
@@ -320,7 +352,7 @@ describe('entrada directa al único módulo', () => {
     await page.waitForURL(/\/cdh\/api\/auth\/sso/);
 
     await page.goto(`${e.base}/?inicio=1`);
-    await page.getByRole('link', { name: 'Control de habitaciones' }).waitFor();
+    await page.getByRole('link', { name: 'Control de Detalles por Habitación' }).waitFor();
 
     // La siguiente entrada vuelve a ser directa: no se recordó nada.
     await page.goto(`${e.base}/`);
@@ -357,15 +389,15 @@ describe('administración', () => {
     await page.getByLabel('Correo').fill('nueva@quartz.example');
     await page.getByLabel('Nombre').fill('Nueva');
     await page.getByLabel('Contraseña temporal').fill('temporal-de-prueba');
-    await page.getByRole('button', { name: 'Guardar' }).click();
-    await page.getByText('nueva@quartz.example').waitFor();
+    await page.getByRole('button', { name: 'Guardar', exact: true }).click();
+    await page.getByRole('button', { name: 'Nueva (nueva@quartz.example)' }).waitFor();
   });
 
   it('un usuario del CDH ya ligado: el error de R7, nombrando a quien lo tiene', async () => {
     const page = await comoAna();
-    await page.getByRole('button', { name: 'Eva' }).click();
+    await page.getByRole('button', { name: 'Eva (eva@quartz.example)' }).click();
     await page.getByLabel('Usuario del CDH').fill('carla.ama');
-    await page.getByRole('button', { name: 'Guardar' }).click();
+    await page.getByRole('button', { name: 'Guardar', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: 'ya está ligado a Carla' }).waitFor();
   });
 
@@ -373,7 +405,7 @@ describe('administración', () => {
     const page = await comoAna();
     e.cdh.caido = true;
     try {
-      await page.getByRole('button', { name: 'Carla' }).click();
+      await page.getByRole('button', { name: 'Carla (carla@quartz.example)' }).click();
       await page.getByRole('button', { name: 'Desactivar' }).click();
       await page.getByRole('alert').filter({ hasText: 'revocación' }).waitFor();
     } finally {
@@ -420,6 +452,23 @@ describe('adaptable y accesible', () => {
       await cabe('administración');
     });
   }
+
+  it('en un celular, ningún objetivo táctil baja de 44 px', async () => {
+    const contexto = await navegador.newContext({ viewport: { width: 360, height: 740 } });
+    const page = await contexto.newPage();
+    paginas.push(page);
+
+    await page.goto(`${e.base}/`);
+    assert.deepEqual(await objetivosPequenos(page), [], 'en la pantalla de entrada');
+
+    await entrar(page, 'ana@quartz.example');
+    await page.getByRole('button', { name: 'Salir' }).waitFor();
+    assert.deepEqual(await objetivosPequenos(page), [], 'en el inicio');
+
+    await page.getByRole('link', { name: 'Administración' }).click();
+    await page.getByRole('heading', { name: 'Administración' }).waitFor();
+    assert.deepEqual(await objetivosPequenos(page), [], 'en administración');
+  });
 
   it('todos los controles tienen nombre accesible', async () => {
     const { page } = await abrir();

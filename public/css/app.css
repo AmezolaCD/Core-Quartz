@@ -1,0 +1,430 @@
+/*
+ * Identidad del CRM: morado #39104e y oro #b2aa6d, en claro y en oscuro.
+ *
+ * Sin estilos en línea a propósito: la CSP del shell es `style-src 'self'`
+ * (PRD §5, riesgo 1), así que un atributo `style=""` no se aplicaría. Todo va
+ * por clases, y mostrar u ocultar es el atributo `hidden`.
+ */
+
+:root {
+  --morado: #39104e;
+  --oro: #b2aa6d;
+
+  --fondo: #f6f4f8;
+  --papel: #ffffff;
+  --tinta: #1d1620;
+  --tenue: #5c5262;
+  --borde: #ded7e3;
+  --peligro: #8c1d2f;
+  --peligro-fondo: #fdf0f2;
+  --aviso: #6b4a06;
+  --aviso-fondo: #fdf6e3;
+  --sombra: 0 1px 2px rgb(29 22 32 / 8%), 0 8px 24px rgb(29 22 32 / 6%);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #15101a;
+    --papel: #1f1826;
+    --tinta: #f2edf5;
+    --tenue: #b3a8bd;
+    --borde: #3a2f45;
+    --peligro: #ff9aa6;
+    --peligro-fondo: #3a1620;
+    --aviso: #f2d692;
+    --aviso-fondo: #3a2e12;
+    --sombra: none;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  /* Ningún hijo ancho puede empujar la página: el criterio de la fase es que
+     `scrollWidth <= innerWidth` a 360 px. */
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  background: var(--fondo);
+  color: var(--tinta);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+.saltar {
+  position: absolute;
+  left: -9999px;
+}
+
+.saltar:focus {
+  left: 8px;
+  top: 8px;
+  z-index: 10;
+  background: var(--papel);
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--oro);
+  outline-offset: 2px;
+}
+
+/* ---- Barra superior ---- */
+
+.barra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--morado);
+  color: #fff;
+}
+
+.marca {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.barra-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 14%);
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.barra a,
+.barra .chip {
+  color: #fff;
+}
+
+/* Un enlace de texto mide lo que mide su línea: a 360 px eran 24 px de alto,
+   por debajo del mínimo táctil que pide el alcance de la fase. */
+.barra a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.barra .chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* ---- Estructura ---- */
+
+.principal {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.principal:focus {
+  outline: none;
+}
+
+.cargando {
+  color: var(--tenue);
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 4px;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 24px 0 8px;
+}
+
+.sub {
+  color: var(--tenue);
+  margin: 0 0 24px;
+}
+
+/* ---- Controles ---- */
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="search"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  background: var(--papel);
+  color: inherit;
+  font: inherit;
+}
+
+.campo {
+  margin-bottom: 16px;
+}
+
+.casilla {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-weight: 500;
+}
+
+.casilla input {
+  width: 20px;
+  height: 20px;
+}
+
+button {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--morado);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.secundario {
+  background: transparent;
+  color: inherit;
+  border-color: var(--borde);
+}
+
+button.peligro {
+  background: var(--peligro);
+  color: #fff;
+}
+
+.barra button.secundario {
+  border-color: rgb(255 255 255 / 40%);
+  color: #fff;
+}
+
+.acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---- Avisos ---- */
+
+.error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--peligro-fondo);
+  color: var(--peligro);
+  border: 1px solid currentcolor;
+}
+
+.pendiente {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--aviso-fondo);
+  color: var(--aviso);
+  border: 1px solid currentcolor;
+}
+
+/* ---- Entrar ---- */
+
+.tarjeta-entrar {
+  max-width: 420px;
+  margin: 8vh auto 0;
+  padding: 24px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: 16px;
+  box-shadow: var(--sombra);
+}
+
+.tarjeta-entrar button {
+  width: 100%;
+}
+
+/* ---- Inicio ---- */
+
+.modulos {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+@media (min-width: 640px) {
+  .modulos {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.modulo {
+  display: block;
+  min-height: 120px;
+  padding: 20px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-left: 6px solid var(--oro);
+  border-radius: 16px;
+  box-shadow: var(--sombra);
+  color: inherit;
+  text-decoration: none;
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+
+.modulo:hover {
+  border-left-color: var(--morado);
+}
+
+.vacio {
+  padding: 24px;
+  background: var(--papel);
+  border: 1px dashed var(--borde);
+  border-radius: 16px;
+  color: var(--tenue);
+}
+
+/* ---- Administración ---- */
+
+.pestanas {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  border-bottom: 1px solid var(--borde);
+}
+
+.pestanas button {
+  background: transparent;
+  color: var(--tenue);
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+}
+
+.pestanas button[aria-selected="true"] {
+  color: inherit;
+  border-bottom-color: var(--oro);
+}
+
+.personas {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.persona {
+  width: 100%;
+  text-align: left;
+  background: var(--papel);
+  color: inherit;
+  border: 1px solid var(--borde);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.persona .correo {
+  font-weight: 400;
+  color: var(--tenue);
+  font-size: 0.9rem;
+  /* Un correo largo no ensancha la página en un celular. */
+  overflow-wrap: anywhere;
+}
+
+.etiqueta {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+}
+
+.etiqueta.baja {
+  color: var(--peligro);
+}
+
+.ficha {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: 16px;
+  box-shadow: var(--sombra);
+}
+
+.ficha .dato {
+  overflow-wrap: anywhere;
+}
+
+.modulo-fila {
+  padding: 16px 0;
+  border-top: 1px solid var(--borde);
+}
+
+.tabla-envoltura {
+  /* La bitácora es ancha: se desplaza ella, no la página. */
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+table {
+  border-collapse: collapse;
+  min-width: 560px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--borde);
+  font-size: 0.9rem;
+  vertical-align: top;
+}

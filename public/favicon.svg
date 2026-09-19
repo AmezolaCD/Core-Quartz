@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Core Quartz">
+  <rect width="64" height="64" rx="12" fill="#39104e" />
+  <path d="M32 12 46 24 40 48H24L18 24z" fill="none" stroke="#b2aa6d" stroke-width="3" stroke-linejoin="round" />
+  <path d="M18 24h28M32 12v36" fill="none" stroke="#b2aa6d" stroke-width="2" opacity=".65" />
+</svg>

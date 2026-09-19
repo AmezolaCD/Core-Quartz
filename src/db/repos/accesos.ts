@@ -169,8 +169,22 @@ export async function desactivarAcceso(
 
 /** R1: módulos que la persona ve ahora mismo, con `modulosVisibles` (`src/nucleo/accesos.ts`). */
 export async function modulosVisiblesDe(pool: Ejecutor, usuarioId: string): Promise<CodigoModulo[]> {
+  return (await catalogoVisibleDe(pool, usuarioId)).map((m) => m.codigo);
+}
+
+/**
+ * Lo mismo que `modulosVisiblesDe`, pero con la fila entera del catálogo.
+ *
+ * El portal necesita el **nombre** para rotular la tarjeta de cada módulo, y
+ * la regla R1 sigue viviendo en un solo sitio: `modulosVisibles` decide, aquí
+ * sólo se vuelve del código a su fila. Escribir «Control de habitaciones» en
+ * el JS habría duplicado en el navegador lo que ya está en `core.modulos`.
+ */
+export async function catalogoVisibleDe(pool: Ejecutor, usuarioId: string): Promise<Modulo[]> {
   const usuario = await obtenerPorId(pool, usuarioId);
   if (!usuario) return [];
   const [catalogo, accesos] = await Promise.all([listarModulos(pool), listarAccesosDe(pool, usuarioId)]);
-  return modulosVisibles(usuario, catalogo, accesos);
+  const visibles = modulosVisibles(usuario, catalogo, accesos);
+  // `modulosVisibles` ya los devuelve en el orden de R1; se conserva.
+  return visibles.flatMap((codigo) => catalogo.filter((m) => m.codigo === codigo));
 }

@@ -145,11 +145,19 @@ describe('R1/R2 · GET /api/auth/yo', () => {
     });
     const r = await nav.pedir('GET', `${P}/api/auth/yo`);
     assert.equal(r.estado, 200);
-    const cuerpo = r.cuerpo as { usuario: { correo: string; es_admin: boolean }; modulos: string[] };
+    const cuerpo = r.cuerpo as {
+      usuario: { correo: string; es_admin: boolean };
+      modulos: { codigo: string; nombre: string; orden: number }[];
+    };
     assert.equal(cuerpo.usuario.correo, 'ana@quartz.example');
     assert.equal(cuerpo.usuario.es_admin, true);
     // R1: por `orden`, no alfabético.
-    assert.deepEqual(cuerpo.modulos, ['crm', 'cdh']);
+    assert.deepEqual(cuerpo.modulos.map((m) => m.codigo), ['crm', 'cdh']);
+    // Con su nombre, para que el portal no lo lleve escrito en el JS (fase 07).
+    assert.deepEqual(cuerpo.modulos, [
+      { codigo: 'crm', nombre: 'CRM de Ventas', orden: 1 },
+      { codigo: 'cdh', nombre: 'Control de Detalles por Habitación', orden: 2 },
+    ]);
   });
 
   it('Carla sólo ve el CDH; Beto sólo el CRM; Eva sólo el CDH (R1)', async () => {
@@ -161,7 +169,8 @@ describe('R1/R2 · GET /api/auth/yo', () => {
       const nav = e.navegador();
       await nav.pedir('POST', `${P}/api/auth/entrar`, { cuerpo: { correo, contrasena: CONTRASENA } });
       const r = await nav.pedir('GET', `${P}/api/auth/yo`);
-      assert.deepEqual((r.cuerpo as { modulos: string[] }).modulos, esperado, correo);
+      const suyos = (r.cuerpo as { modulos: { codigo: string }[] }).modulos.map((m) => m.codigo);
+      assert.deepEqual(suyos, esperado, correo);
     }
   });
 });

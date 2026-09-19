@@ -8,6 +8,7 @@
  * que también se prueban los códigos de estado.
  */
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import type { Pool } from 'pg';
 import type { Config } from './config.ts';
@@ -19,6 +20,9 @@ import { rutasAuth } from './rutas/auth.ts';
 import { rutasModulos } from './rutas/modulos.ts';
 import { rutasAdmin } from './rutas/admin.ts';
 import { rutasSso } from './rutas/sso.ts';
+
+/** Carpeta del portal, resuelta desde este archivo y no desde el cwd. */
+const RAIZ_PUBLICA = fileURLToPath(new URL('../public/', import.meta.url));
 
 export interface Dependencias {
   pool: Pool;
@@ -54,8 +58,18 @@ export function crearApp(deps: Dependencias): Express {
   app.disable('x-powered-by');
 
   // `GET /portal` sin barra final: 301 a `/portal/`.
+  //
+  // El `endsWith('/')` no sobra. Express enruta laxo: `app.get('/portal')`
+  // casa también `/portal/`, así que sin esta guarda la página se redirigía a
+  // sí misma y el navegador cortaba con ERR_TOO_MANY_REDIRECTS. Nunca se notó
+  // porque hasta la fase 07 ninguna prueba pedía la página, sólo `/portal/api/…`.
+  // Es el mismo fallo que el del CDH en la fase 05.
   if (base !== '') {
-    app.get(base, (_peticion, respuesta) => {
+    app.get(base, (peticion, respuesta, siguiente) => {
+      if ((peticion.originalUrl.split('?')[0] ?? '').endsWith('/')) {
+        siguiente();
+        return;
+      }
       respuesta.redirect(301, `${base}/`);
     });
   }
@@ -67,6 +81,20 @@ export function crearApp(deps: Dependencias): Express {
     respuesta.setHeader('referrer-policy', 'same-origin');
     siguiente();
   });
+  // El portal es HTML, CSS y JS sin compilación (fase 07).
+  //
+  // Va **antes** de la cookie y de la sesión a propósito: `conSesion` hace dos
+  // consultas a la base en cuanto hay cookie, y una hoja de estilo no necesita
+  // saber quién la pide. Si no, cada carga de la página costaba catorce
+  // consultas de más. Sólo sirve `public/`; lo demás sigue cayendo en el 404.
+  rutas.use(
+    express.static(RAIZ_PUBLICA, {
+      index: 'index.html',
+      dotfiles: 'ignore',
+      redirect: false,
+    }),
+  );
+
   rutas.use(express.json({ limit: '100kb' }));
   rutas.use(cookieParser());
   rutas.use(conSesion({ pool: deps.pool, ahora: deps.ahora ?? Date.now }));

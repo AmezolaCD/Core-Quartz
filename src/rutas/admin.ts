@@ -110,7 +110,9 @@ export function rutasAdmin(deps: Dependencias): Router {
     const conAccesos = await Promise.all(
       usuarios.map(async (u) => ({ ...comoPublico(u), accesos: await listarAccesosDe(deps.pool, u.id) })),
     );
-    respuesta.json({ usuarios: conAccesos });
+    // El catálogo **entero**, no el visible de quien administra: para dar un
+    // acceso hay que poder nombrar un módulo que uno mismo no tenga (R7).
+    respuesta.json({ usuarios: conAccesos, modulos: await listarModulos(deps.pool) });
   });
 
   rutas.post('/usuarios', async (peticion, respuesta) => {

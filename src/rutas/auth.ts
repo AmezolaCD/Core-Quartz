@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import type { Dependencias } from '../app.ts';
 import { validarEntrada } from '../nucleo/accesos.ts';
-import { modulosVisiblesDe } from '../db/repos/accesos.ts';
+import { catalogoVisibleDe } from '../db/repos/accesos.ts';
 import { crearSesion, revocarSesion } from '../db/repos/sesiones.ts';
 import { obtenerPorCorreo } from '../db/repos/usuarios.ts';
 import { COOKIE_SESION, exigirSesion, opcionesCookie } from '../middleware/sesion.ts';
@@ -19,6 +19,16 @@ export const MENSAJES = {
 /** Lo que se devuelve de una persona: nunca más que esto. */
 function comoPublico(usuario: { id: string; correo: string; nombre: string; es_admin: boolean }) {
   return { id: usuario.id, correo: usuario.correo, nombre: usuario.nombre, es_admin: usuario.es_admin };
+}
+
+/**
+ * Los módulos visibles con su nombre, para que el portal pueda rotular las
+ * tarjetas sin llevar el catálogo escrito en el JS. `activo` no se manda: por
+ * construcción todos los visibles lo están.
+ */
+async function modulosPublicos(pool: Dependencias['pool'], usuarioId: string) {
+  const visibles = await catalogoVisibleDe(pool, usuarioId);
+  return visibles.map((m) => ({ codigo: m.codigo, nombre: m.nombre, orden: m.orden }));
 }
 
 export function rutasAuth(deps: Dependencias): Router {
@@ -79,7 +89,7 @@ export function rutasAuth(deps: Dependencias): Router {
     limite.olvidar(porCorreo);
 
     respuesta.cookie(COOKIE_SESION, token, opcionesCookie(deps.config.basePath, peticion.secure, expira));
-    respuesta.json({ usuario: comoPublico(usuario), modulos: await modulosVisiblesDe(deps.pool, usuario.id) });
+    respuesta.json({ usuario: comoPublico(usuario), modulos: await modulosPublicos(deps.pool, usuario.id) });
   });
 
   rutas.post('/salir', exigirSesion(), async (peticion, respuesta) => {
@@ -90,7 +100,7 @@ export function rutasAuth(deps: Dependencias): Router {
 
   rutas.get('/yo', exigirSesion(), async (peticion, respuesta) => {
     const usuario = peticion.cq!.usuario;
-    respuesta.json({ usuario: comoPublico(usuario), modulos: await modulosVisiblesDe(deps.pool, usuario.id) });
+    respuesta.json({ usuario: comoPublico(usuario), modulos: await modulosPublicos(deps.pool, usuario.id) });
   });
 
   return rutas;
