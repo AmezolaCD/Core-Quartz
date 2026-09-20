@@ -1,0 +1,134 @@
+# Todas las suites, el barrido de secretos y la construcción de la imagen.
+name: pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Un push nuevo cancela la corrida vieja de la misma rama.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+
+    services:
+      pg:
+        image: postgres:16
+        env:
+          # Sin contraseña a propósito. El contenedor es desechable y sólo lo
+          # alcanza este job, así que la contraseña no protegía nada — y metía
+          # una cadena de conexión con credencial en un repositorio público,
+          # que es justo lo que el job `secretos` busca. Lo encontró.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL_TEST: postgres://postgres@127.0.0.1:5432/postgres
+      # Las pruebas de las fases 03 y 06 leen el `index.html` y el SQL del CRM
+      # desde un clon suyo.
+      CRM_REPO: ${{ github.workspace }}/crm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clonar el CRM (fases 03 y 06)
+        uses: actions/checkout@v4
+        with:
+          repository: AmezolaCD/CRM-VENTAS-
+          ref: claude/crm-kanban-migration-a9ho76
+          path: crm
+          # La línea base de la fase 03 es un commit fijo: hace falta el
+          # historial entero, no un clon superficial.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Playwright trae su propio Chromium; aquí sí se instala, así que
+      # `CQ_CHROMIUM_PATH` no hace falta.
+      - name: Instalar el navegador de Playwright
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run typecheck
+
+      - run: npm run test:nucleo
+      - run: npm run test:db
+      - run: npm run test:api
+      - run: npm run test:crm-rls
+      - run: npm run test:crm-sso
+      - run: npm run test:ui
+
+  secretos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Que no se haya colado un secreto
+        run: |
+          set -Eeuo pipefail
+          # El repo es público (invariante §5). Se busca el CONTENIDO de una
+          # llave, no su nombre: `SUPABASE_SERVICE_ROLE_KEY=` aparece a
+          # propósito en .env.example y en la documentación.
+          malo=0
+
+          # Un JWT de Supabase: tres trozos base64url separados por puntos, y
+          # el encabezado de un HS256 siempre empieza igual.
+          if git grep -nIE 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{20,}' -- . ':!test' ':!docs'; then
+            echo "::error::parece haber un JWT real en el repositorio"
+            malo=1
+          fi
+
+          # Una cadena de conexión con contraseña de verdad.
+          if git grep -nIE 'postgres(ql)?://[^:@/[:space:]]+:[^@/[:space:]]+@' -- . ':!.env.example' ':!docs' ':!test'; then
+            echo "::error::parece haber una cadena de conexión con contraseña"
+            malo=1
+          fi
+
+          # Ningún .env debe estar versionado (salvo el ejemplo).
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example'; then
+            echo "::error::hay un .env versionado"
+            malo=1
+          fi
+
+          exit $malo
+
+  imagen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir la imagen del shell
+        run: docker build -f deploy/Dockerfile -t core-quartz:ci .
+
+      - name: Que corra como uid 1000 y no lleve un .env
+        run: |
+          set -Eeuo pipefail
+          uid="$(docker run --rm core-quartz:ci id -u)"
+          [ "$uid" = "1000" ] || { echo "::error::la imagen corre como uid $uid"; exit 1; }
+          if docker run --rm core-quartz:ci test -e /app/.env; then
+            echo "::error::la imagen contiene un .env"; exit 1
+          fi
+
+      - name: Que el Caddyfile sea válido
+        run: |
+          docker run --rm -e CQ_ORIGEN=localhost \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

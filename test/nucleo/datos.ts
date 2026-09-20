@@ -35,8 +35,8 @@ const ACCESOS: Acceso[] = [
 
 /** `crm` va antes que `cdh` por `orden` (alfabéticamente sería al revés). */
 const MODULOS: Modulo[] = [
-  { codigo: 'crm', nombre: 'CRM', activo: true, orden: 1 },
-  { codigo: 'cdh', nombre: 'Control de habitaciones', activo: true, orden: 2 },
+  { codigo: 'crm', nombre: 'CRM', url_base: '/', activo: true, orden: 1 },
+  { codigo: 'cdh', nombre: 'Control de habitaciones', url_base: '/cdh', activo: true, orden: 2 },
 ];
 
 export function usuario(p: Persona): Usuario {

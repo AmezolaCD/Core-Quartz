@@ -1,0 +1,49 @@
+# ============================================================================
+# Core Quartz · un solo origen para el portal y el CDH
+#
+#   https://<CQ_ORIGEN>/portal/*  → shell
+#   https://<CQ_ORIGEN>/cdh/*     → CDH
+#   cualquier otra ruta           → 404
+#
+# El CRM no pasa por aquí: vive en Vercel, en su propio dominio, y el portal
+# lo alcanza con la `url_base` absoluta de `core.modulos`.
+# ============================================================================
+
+{$CQ_ORIGEN} {
+	encode zstd gzip
+
+	log {
+		output stderr
+		format console
+	}
+
+	# HSTS. Caddy ya sirve sólo por HTTPS; esto es para que el navegador no lo
+	# intente por HTTP ni una primera vez.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# R4 · PRD §5 riesgo 4: el canje del boleto es la puerta del CDH y sólo se
+	# alcanza por la red interna de Docker. Desde fuera no existe.
+	#
+	# Va primero a propósito: en Caddy manda el `handle` más específico, pero
+	# dejarlo arriba hace que se lea en el orden en que importa.
+	handle /portal/api/sso/* {
+		respond 404
+	}
+
+	# El shell responde el 301 de `/portal` → `/portal/`, así que las dos formas
+	# tienen que llegarle.
+	@portal path /portal /portal/*
+	handle @portal {
+		reverse_proxy shell:4000
+	}
+
+	@cdh path /cdh /cdh/*
+	handle @cdh {
+		reverse_proxy cdh:3000
+	}
+
+	# Todo lo demás. La raíz no es del portal: es del CRM, que está en Vercel.
+	handle {
+		respond 404
+	}
+}

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { migrar } from '../../src/db/migrar.ts';
-import { baseDePrueba } from '../apoyo/pg.ts';
+import { baseDePrueba, crearBaseDesechable } from '../apoyo/pg.ts';
 
 const DIR = join(import.meta.dirname, '../../src/db/migraciones');
 const ARCHIVOS = readdirSync(DIR)
@@ -126,5 +126,41 @@ describe('migrador', () => {
       esquemas.map((e) => e.nspname),
       ['core'],
     );
+  });
+});
+
+/**
+ * Fase 08: las migraciones corren **al arrancar el servidor**, así que dos
+ * contenedores que arranquen a la vez las ejecutan a la vez. El migrador toma
+ * un `pg_advisory_lock` para que no se pisen.
+ */
+describe('fase 08 · dos migradores a la vez', () => {
+  it('sobre una base vacía, sólo uno aplica cada migración', async () => {
+    const otra = await crearBaseDesechable();
+    // `crearBaseDesechable` ya migró; se borra el registro y el esquema para
+    // partir de cero sin inventar otra base.
+    await otra.pool.query('DROP SCHEMA core CASCADE');
+    try {
+      const [uno, dos] = await Promise.all([migrar(otra.pool), migrar(otra.pool)]);
+      // Cada archivo lo aplica exactamente uno de los dos, nunca los dos.
+      assert.deepEqual([...uno, ...dos].sort(), ARCHIVOS);
+      assert.equal(uno.length + dos.length, ARCHIVOS.length);
+
+      const { rows } = await otra.pool.query<{ n: string }>('SELECT count(*) AS n FROM core.migraciones');
+      assert.equal(Number(rows[0]?.n), ARCHIVOS.length);
+    } finally {
+      await otra.destruir();
+    }
+  });
+
+  it('el lock se suelta: una tercera corrida no se queda esperando', async () => {
+    // Si `pg_advisory_unlock` no corriera, esto colgaría hasta el tope de la prueba.
+    const otra = await crearBaseDesechable();
+    try {
+      assert.deepEqual(await migrar(otra.pool), []);
+      assert.deepEqual(await migrar(otra.pool), []);
+    } finally {
+      await otra.destruir();
+    }
   });
 });

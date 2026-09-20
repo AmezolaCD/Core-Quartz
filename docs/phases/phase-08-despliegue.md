@@ -24,12 +24,50 @@ Variables: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVIC
 - `docs/DESPLIEGUE.md` (paso a paso en español, incluye respaldo previo del CDH y cómo revertir)
 - `.github/workflows/pruebas.yml` (todas las suites + `git grep` de secretos + construir imagen)
 
+## Decisión de arquitectura (20 sep 2026)
+
+Juan: **máquina pública con dominio**, como describe el PRD §5, y el CDH todavía
+**no está en uso real**, así que no hay que migrar a nadie. Eso zanja lo que la
+sección heredada de la fase 06 dejaba abierto.
+
+Decisión de diseño que se deriva: el origen se construye para **funcionar solo**,
+con su propio dominio y su propio HTTPS. Las reescrituras de Vercel pasan a ser
+un añadido opcional en vez de un requisito, y sus límites de tamaño y espera se
+pueden medir después, contra un despliegue real, sin bloquear la fase.
+
 ## Criterios de aceptación
+
+Verificados aquí:
+
+- [x] El Caddyfile enruta como debe. Comprobado con un Caddy de verdad, no sólo
+      validando la sintaxis: `/portal` y `/portal/` → shell; `/cdh` y `/cdh/` →
+      CDH; `/portal/api/sso/*` → 404; `/` y cualquier otra ruta → 404.
+- [x] El `docker compose config` resuelve, exige las variables que no pueden
+      faltar, y el `${...}` del healthcheck sobrevive sin interpolarse.
+- [x] El barrido de secretos no da falsos positivos sobre este repo **y sí
+      detecta** un JWT, una cadena con contraseña y un `.env` plantados.
+- [x] Migraciones al arrancar, bajo `pg_advisory_lock`. Sin el lock, dos
+      migradores simultáneos fallan 5 de 5 veces.
+
+Cerrados por el CI en el PR #6 (corrida `35531574778`, head `c470e80`):
+
+- [x] CI verde en un PR de prueba. Los tres jobs —`pruebas`, `secretos`, `imagen`— en verde.
+- [x] El contenedor del shell corre como uid 1000 y no contiene `.env`. Lo comprueba el job
+      `imagen`, que además construye la imagen de verdad y valida el Caddyfile dentro de la
+      imagen oficial de Caddy.
+
+Y el CI encontró algo en su primera corrida: **el barrido de secretos se detectó a sí mismo**. El
+workflow traía `DATABASE_URL_TEST: postgres://postgres:pruebas@…`, una cadena de conexión con
+credencial en un repositorio público. No era un falso positivo. Se arregló quitando la contraseña
+(`POSTGRES_HOST_AUTH_METHOD: trust`), no excluyendo el archivo del barrido: excluirlo dejaría
+abierta la puerta por la que mañana se cuela una de verdad.
+
+**Siguen sin verificar, y hay que decirlo**: este contenedor tiene el CLI de Docker pero **no el
+demonio**, y el CI tampoco levanta el conjunto. Quedan para la máquina, al desplegar:
+
 - [ ] `deploy/verificar.sh` con `CQ_ORIGEN=localhost`: levanta todo, `GET https://localhost/portal/api/salud` → `{ok:true}`, `GET https://localhost/cdh/api/health` → `{ok:true}`, `GET https://localhost/portal/api/sso/canjear` → 404, `GET https://localhost/` → 404.
-- [ ] Con Vercel (preview del repo del CRM): `/portal/` y `/cdh/` cargan, y las tres mediciones quedan anotadas en `docs/DESPLIEGUE.md`.
-- [ ] El contenedor del shell corre como uid 1000 y no contiene `.env`.
 - [ ] Volumen del CDH intacto tras `docker compose down && up` (conteo de `movements` igual).
-- [ ] CI verde en un PR de prueba.
+- [ ] Con Vercel (preview del repo del CRM): `/portal/` y `/cdh/` cargan, y las tres mediciones quedan anotadas en `docs/DESPLIEGUE.md`. *(Ya no bloquea: el origen funciona sin Vercel. Se mide si se quiere el dominio único.)*
 
 ## Verificación
 ```bash
@@ -53,7 +91,11 @@ Lo que hay que resolver aquí, antes de escribir un solo `rewrite`:
    privada, `/portal/*` tampoco, y entonces **no hace falta tocar `vercel.json`**: el CRM se
    queda solo en Vercel y el portal y el CDH viven en la red privada. Menos piezas, no más.
 
-2. **Los dos enlaces del portal son relativos, y con dominios distintos están rotos.**
+2. ~~**Los dos enlaces del portal son relativos, y con dominios distintos están rotos.**~~
+   **Resuelto.** `enlaceCrm` y `enlaceCdh` aceptan la `url_base` del módulo, con la regla
+   *absoluta manda, relativa como antes*. Se hizo antes de decidir la arquitectura porque no
+   dependía de ella: el CRM está en Vercel en todos los escenarios. Lo que sigue es el
+   planteamiento original.
    `enlaceCrm` devuelve `/#nube=…&cq=…` y `enlaceCdh` devuelve `<prefijo>/api/auth/sso?codigo=…`
    (`src/nucleo/enlaces.ts`). Dan por hecho el mismo dominio. Si el portal no vive en
    `core-quartz.vercel.app`, el enlace al CRM redirige dentro del propio host del portal y **la

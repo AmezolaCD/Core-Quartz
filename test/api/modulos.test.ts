@@ -182,3 +182,63 @@ describe('R1 · abrir un módulo apagado', () => {
     }
   });
 });
+
+describe('fase 08 · módulos en otro dominio (core.modulos.url_base)', () => {
+  const CRM = 'https://core-quartz.vercel.app';
+  const CDH = 'https://equipo.tailnet.ts.net/cdh';
+
+  /** Deja `url_base` como estaba, pase lo que pase en la prueba. */
+  async function conUrlBase(codigo: string, valor: string, prueba: () => Promise<void>): Promise<void> {
+    const previo = await unaFila<{ url_base: string | null }>(
+      e.pool,
+      `SELECT url_base FROM core.modulos WHERE codigo = $1`,
+      [codigo],
+    );
+    await e.pool.query(`UPDATE core.modulos SET url_base = $2 WHERE codigo = $1`, [codigo, valor]);
+    try {
+      await prueba();
+    } finally {
+      await e.pool.query(`UPDATE core.modulos SET url_base = $2 WHERE codigo = $1`, [
+        codigo,
+        previo?.url_base ?? null,
+      ]);
+    }
+  }
+
+  it('el 302 al CRM sale absoluto: sin esto la entrada cae dentro del portal', async () => {
+    await conUrlBase('crm', CRM, async () => {
+      const nav = await comoQuien('beto@quartz.example');
+      const r = await nav.pedir('GET', `${P}/api/modulos/crm/abrir`);
+      assert.equal(r.estado, 302);
+      assert.ok(r.destino?.startsWith(`${CRM}/#nube=`), `destino: ${r.destino}`);
+      assert.ok(r.destino?.includes('&cq='), `destino: ${r.destino}`);
+    });
+  });
+
+  it('el 302 al CDH sale absoluto y conserva su prefijo', async () => {
+    await conUrlBase('cdh', CDH, async () => {
+      const nav = await comoQuien('carla@quartz.example');
+      const r = await nav.pedir('GET', `${P}/api/modulos/cdh/abrir`);
+      assert.equal(r.estado, 302);
+      assert.ok(r.destino?.startsWith(`${CDH}/api/auth/sso?codigo=`), `destino: ${r.destino}`);
+    });
+  });
+
+  it('con la semilla por omisión todo sigue relativo, como en las fases 04 y 05', async () => {
+    const nav = await comoQuien('carla@quartz.example');
+    const r = await nav.pedir('GET', `${P}/api/modulos/cdh/abrir`);
+    assert.equal(r.estado, 302);
+    assert.ok(r.destino?.startsWith('/cdh/api/auth/sso?codigo='), `destino: ${r.destino}`);
+  });
+
+  it('una url_base envenenada no manda a nadie a ningún lado: 500, nunca un 302', async () => {
+    // Redirección abierta: la fila la escribe una administradora, pero aquí se
+    // decide a dónde va alguien que acaba de entrar. Más vale caerse.
+    await conUrlBase('cdh', '//malo.example', async () => {
+      const nav = await comoQuien('carla@quartz.example');
+      const r = await nav.pedir('GET', `${P}/api/modulos/cdh/abrir`);
+      assert.equal(r.estado, 500);
+      assert.ok(!String(r.destino ?? '').includes('malo.example'), `destino: ${r.destino}`);
+    });
+  });
+});

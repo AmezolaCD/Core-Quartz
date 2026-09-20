@@ -1,0 +1,14 @@
+# Lo que no entra en la imagen. Lo que no se copia no se puede filtrar.
+.git
+.github
+.env
+.env.*
+!.env.example
+.mcp.json
+node_modules
+test
+docs
+deploy
+docker-compose.test.yml
+tsconfig.json
+npm-debug.log*

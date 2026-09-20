@@ -2,12 +2,20 @@
 import { crearApp } from './app.ts';
 import { leerConfig } from './config.ts';
 import { crearPool } from './db/pool.ts';
+import { migrar } from './db/migrar.ts';
 import { crearClienteSupabase } from './servicios/supabase-auth.ts';
 import { crearClienteCdh } from './servicios/cdh-cliente.ts';
 
 export async function arrancar(): Promise<void> {
   const config = leerConfig();
   const pool = crearPool(config.databaseUrl);
+
+  // Migraciones al arrancar (fase 08). Van antes de escuchar: más vale no
+  // levantarse que atender con el esquema a medias. `migrar` es idempotente y
+  // toma un `pg_advisory_lock`, así que dos contenedores que arranquen a la vez
+  // no se pisan.
+  const aplicadas = await migrar(pool);
+  if (aplicadas.length > 0) console.log(`Migraciones aplicadas: ${aplicadas.join(', ')}`);
 
   const app = crearApp({
     pool,

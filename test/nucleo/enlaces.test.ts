@@ -109,3 +109,85 @@ describe('normalizarBasePath', () => {
     });
   }
 });
+
+// ---- Fase 08: dominios distintos ----
+
+/**
+ * El PRD §5 daba por hecho un solo dominio. No lo hay: el CRM vive en Vercel y
+ * el portal no, así que un enlace relativo al CRM redirige dentro del propio
+ * host del portal y la entrada no funciona (R5).
+ *
+ * `core.modulos.url_base` existe desde la fase 02 y nadie la usaba. Los dos
+ * constructores la aceptan ahora: **absoluta manda, relativa se comporta como
+ * antes**, de modo que sirve igual si algún día todo vuelve a un solo origen.
+ */
+const CRM_ABSOLUTA = 'https://core-quartz.vercel.app';
+const CDH_ABSOLUTA = 'https://equipo.tailnet.ts.net/cdh';
+
+const X08 = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
+
+/** Bases que nunca deben producir un enlace: son redirección abierta o peor. */
+const BASES_ENVENENADAS = ['//malo.example', 'javascript:alert(1)', 'http:', '/\\malo.example', 'data:text/html,x'];
+
+describe('fase 08 · enlaceCrm con url_base', () => {
+  it('sin url_base sigue siendo relativo, exactamente como antes', () => {
+    assert.equal(enlaceCrm(DATOS_CRM), enlaceCrm({ ...DATOS_CRM, urlBase: null }));
+    esRutaRelativa(enlaceCrm({ ...DATOS_CRM, urlBase: null }));
+  });
+
+  it('con url_base absoluta apunta al CRM de verdad, y conserva el fragmento', () => {
+    const r = enlaceCrm({ ...DATOS_CRM, urlBase: CRM_ABSOLUTA });
+    assert.ok(r.startsWith(`${CRM_ABSOLUTA}/#nube=`), r);
+    assert.ok(r.includes(`&cq=${DATOS_CRM.tokenHash}`), r);
+    // El CRM lee la nube del fragmento; tiene que seguir decodificando.
+    const m = r.match(/[#&]nube=([A-Za-z0-9_-]+)/);
+    assert.ok(m, r);
+    assert.deepEqual(JSON.parse(deB64url(m![1]!)), { u: DATOS_CRM.supabaseUrl, k: DATOS_CRM.anon });
+  });
+
+  it('una url_base con barra final no produce dos barras', () => {
+    const r = enlaceCrm({ ...DATOS_CRM, urlBase: `${CRM_ABSOLUTA}/` });
+    assert.ok(r.startsWith(`${CRM_ABSOLUTA}/#nube=`), r);
+  });
+
+  it('`/` —la semilla por omisión— cuenta como relativa', () => {
+    esRutaRelativa(enlaceCrm({ ...DATOS_CRM, urlBase: '/' }));
+  });
+
+  it('una url_base envenenada se rechaza; nunca sale un enlace', () => {
+    for (const urlBase of BASES_ENVENENADAS) {
+      assert.throws(() => enlaceCrm({ ...DATOS_CRM, urlBase }), Error, `no rechazó ${urlBase}`);
+    }
+  });
+});
+
+describe('fase 08 · enlaceCdh con url_base', () => {
+  it('sin url_base sigue saliendo del basePathCdh, como antes', () => {
+    const r = enlaceCdh({ basePathCdh: '/cdh', codigo: X08, urlBase: null });
+    assert.equal(r, enlaceCdh({ basePathCdh: '/cdh', codigo: X08 }));
+    esRutaRelativa(r);
+  });
+
+  it('con url_base absoluta respeta su prefijo de ruta', () => {
+    const r = enlaceCdh({ basePathCdh: '/cdh', codigo: X08, urlBase: CDH_ABSOLUTA });
+    assert.equal(r, `${CDH_ABSOLUTA}/api/auth/sso?codigo=${X08}`);
+  });
+
+  it('la url_base absoluta manda sobre el basePathCdh, que es del otro despliegue', () => {
+    const r = enlaceCdh({ basePathCdh: '/otro', codigo: X08, urlBase: CDH_ABSOLUTA });
+    assert.ok(r.startsWith(`${CDH_ABSOLUTA}/api/auth/sso`), r);
+    assert.ok(!r.includes('/otro'), r);
+  });
+
+  it('el código sigue escapado dentro de una url_base absoluta', () => {
+    const r = enlaceCdh({ basePathCdh: '', codigo: 'a b&c=d', urlBase: CDH_ABSOLUTA });
+    assert.ok(r.includes(`codigo=${encodeURIComponent('a b&c=d')}`), r);
+    assert.ok(!r.includes(' '), r);
+  });
+
+  it('una url_base envenenada se rechaza; nunca sale un enlace', () => {
+    for (const urlBase of BASES_ENVENENADAS) {
+      assert.throws(() => enlaceCdh({ basePathCdh: '/cdh', codigo: X08, urlBase }), Error, `no rechazó ${urlBase}`);
+    }
+  });
+});

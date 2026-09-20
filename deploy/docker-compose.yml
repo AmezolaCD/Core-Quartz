@@ -1,0 +1,136 @@
+# ============================================================================
+# Core Quartz · portal + CDH detrás de un solo origen HTTPS
+#
+#   cd deploy && cp ../.env.example .env   # y llenarlo
+#   docker compose up -d --build
+#
+# La imagen del CDH se construye en SU repositorio (`docker compose build` allá,
+# que la etiqueta `cdh-quartz:1.0.0`). Aquí sólo se usa: el shell nunca escribe
+# en el CDH ni en su código, y mezclar los dos árboles invitaría a hacerlo.
+# ============================================================================
+name: core-quartz
+
+services:
+  shell:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: core-quartz:1.0.0
+    container_name: cq-shell
+    restart: unless-stopped
+
+    # Sin `ports`: al shell sólo se llega por Caddy. Es lo que mantiene el
+    # canje de boletos (`/portal/api/sso/*`) fuera de internet.
+    expose:
+      - "4000"
+
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      CQ_BASE_PATH: "${CQ_BASE_PATH:-/portal}"
+      CQ_BASE_PATH_CDH: "${CQ_BASE_PATH_CDH:-/cdh}"
+      DATABASE_URL: "${DATABASE_URL:?defina DATABASE_URL en .env}"
+      SUPABASE_URL: "${SUPABASE_URL:?defina SUPABASE_URL en .env}"
+      SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY:?defina SUPABASE_ANON_KEY en .env}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:?defina SUPABASE_SERVICE_ROLE_KEY en .env}"
+      CQ_SSO_SECRETO: "${CQ_SSO_SECRETO:?defina CQ_SSO_SECRETO en .env (el mismo del CDH)}"
+      # Por la red interna, con el prefijo del CDH ya puesto.
+      CQ_CDH_INTERNO: "${CQ_CDH_INTERNO:-http://cdh:3000/cdh}"
+      # Siembran `core.modulos.url_base` en la PRIMERA migración, y sólo en
+      # ésa. El CRM vive en Vercel, en otro dominio: su dirección va absoluta o
+      # la entrada al CRM no funciona. El CDH comparte origen, así que relativa.
+      CQ_URL_CRM: "${CQ_URL_CRM:?defina CQ_URL_CRM en .env (la dirección del CRM en Vercel)}"
+      CQ_URL_CDH: "${CQ_URL_CDH:-/cdh}"
+
+    depends_on:
+      cdh:
+        condition: service_healthy
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cdh:
+    # Se construye en el repo del CDH, no aquí.
+    image: "${CDH_IMAGEN:-cdh-quartz:1.0.0}"
+    container_name: cq-cdh
+    restart: unless-stopped
+
+    expose:
+      - "3000"
+
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      CDH_TZ: "${CDH_TZ:-America/Tijuana}"
+      TZ: "${CDH_TZ:-America/Tijuana}"
+      CDH_SEED_PASSWORD: "${CDH_SEED_PASSWORD:?defina CDH_SEED_PASSWORD en .env}"
+      # Las tres de la fase 05, que van juntas.
+      CDH_BASE_PATH: "${CQ_BASE_PATH_CDH:-/cdh}"
+      CQ_URL_INTERNA: "${CQ_URL_INTERNA:-http://shell:4000/portal}"
+      CQ_SSO_SECRETO: "${CQ_SSO_SECRETO:?defina CQ_SSO_SECRETO en .env (el mismo del shell)}"
+
+    volumes:
+      # La base SQLite y las fotografías del CDH. Su historial vive aquí.
+      - cdh-data:/app/data
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000' + (process.env.CDH_BASE_PATH || '') + '/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cq-caddy
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+
+    environment:
+      CQ_ORIGEN: "${CQ_ORIGEN:?defina CQ_ORIGEN en .env (el dominio que apunta a esta máquina)}"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificados y su renovación. Sin este volumen, cada recreación volvería
+      # a pedirlos y toparía con los límites de emisión de Let's Encrypt.
+      - caddy-data:/data
+      - caddy-config:/config
+
+    depends_on:
+      - shell
+      - cdh
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Para reaprovechar el volumen de una instalación previa del CDH, márquelo
+  # externo y nómbrelo: `external: true` + `name: cdhquartz_cdh-data`.
+  cdh-data:
+  caddy-data:
+  caddy-config:
