@@ -49,14 +49,24 @@ Verificados aquí:
 - [x] Migraciones al arrancar, bajo `pg_advisory_lock`. Sin el lock, dos
       migradores simultáneos fallan 5 de 5 veces.
 
-**No verificados aquí, y hay que decirlo**: este contenedor tiene el CLI de
-Docker pero **no el demonio**, así que no se pudo construir la imagen ni correr
-`deploy/verificar.sh` de punta a punta. Quedan para el CI y para la máquina:
+Cerrados por el CI en el PR #6 (corrida `35531574778`, head `c470e80`):
+
+- [x] CI verde en un PR de prueba. Los tres jobs —`pruebas`, `secretos`, `imagen`— en verde.
+- [x] El contenedor del shell corre como uid 1000 y no contiene `.env`. Lo comprueba el job
+      `imagen`, que además construye la imagen de verdad y valida el Caddyfile dentro de la
+      imagen oficial de Caddy.
+
+Y el CI encontró algo en su primera corrida: **el barrido de secretos se detectó a sí mismo**. El
+workflow traía `DATABASE_URL_TEST: postgres://postgres:pruebas@…`, una cadena de conexión con
+credencial en un repositorio público. No era un falso positivo. Se arregló quitando la contraseña
+(`POSTGRES_HOST_AUTH_METHOD: trust`), no excluyendo el archivo del barrido: excluirlo dejaría
+abierta la puerta por la que mañana se cuela una de verdad.
+
+**Siguen sin verificar, y hay que decirlo**: este contenedor tiene el CLI de Docker pero **no el
+demonio**, y el CI tampoco levanta el conjunto. Quedan para la máquina, al desplegar:
 
 - [ ] `deploy/verificar.sh` con `CQ_ORIGEN=localhost`: levanta todo, `GET https://localhost/portal/api/salud` → `{ok:true}`, `GET https://localhost/cdh/api/health` → `{ok:true}`, `GET https://localhost/portal/api/sso/canjear` → 404, `GET https://localhost/` → 404.
-- [ ] El contenedor del shell corre como uid 1000 y no contiene `.env`. *(El job `imagen` del CI lo comprueba en cuanto corra.)*
 - [ ] Volumen del CDH intacto tras `docker compose down && up` (conteo de `movements` igual).
-- [ ] CI verde en un PR de prueba.
 - [ ] Con Vercel (preview del repo del CRM): `/portal/` y `/cdh/` cargan, y las tres mediciones quedan anotadas en `docs/DESPLIEGUE.md`. *(Ya no bloquea: el origen funciona sin Vercel. Se mide si se quiere el dominio único.)*
 
 ## Verificación
