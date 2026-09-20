@@ -17,10 +17,10 @@ export type ResultadoGuardarAcceso =
   | { ok: false; motivo: 'duplicado'; dueno: string };
 
 /** Las filas tal como llegan de `pg`. */
-type FilaModulo = { codigo: CodigoModulo; nombre: string; activo: boolean; orden: number };
+type FilaModulo = { codigo: CodigoModulo; nombre: string; url_base: string | null; activo: boolean; orden: number };
 type FilaAcceso = { usuario_id: string; modulo: CodigoModulo; usuario_modulo: string | null; activo: boolean };
 
-const CAMPOS_MODULO = 'codigo, nombre, activo, orden';
+const CAMPOS_MODULO = 'codigo, nombre, url_base, activo, orden';
 const CAMPOS_ACCESO = 'usuario_id, modulo, usuario_modulo, activo';
 
 /** Cómo se nombra un acceso en la bitácora. */

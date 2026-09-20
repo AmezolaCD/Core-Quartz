@@ -66,7 +66,7 @@ export type ResultadoCanjeBoleto =
 
 /** Las filas tal como llegan de `pg`. */
 type FilaUsuario = { id: string; correo: string; nombre: string; es_admin: boolean; activo: boolean };
-type FilaModulo = { codigo: CodigoModulo; nombre: string; activo: boolean; orden: number };
+type FilaModulo = { codigo: CodigoModulo; nombre: string; url_base: string | null; activo: boolean; orden: number };
 type FilaAcceso = { usuario_id: string; modulo: CodigoModulo; usuario_modulo: string | null; activo: boolean };
 
 /** La fila quemada más las filas de usuario, acceso y módulo leídas en el mismo instante. */
@@ -88,6 +88,7 @@ type FilaCanje = {
   a_activo: boolean | null;
   m_codigo: CodigoModulo | null;
   m_nombre: string | null;
+  m_url_base: string | null;
   m_activo: boolean | null;
   m_orden: number | null;
 };
@@ -124,7 +125,7 @@ export async function quemarPendientesDe(ejecutor: Ejecutor, usuarioId: string):
 /** R3: emite un boleto si R1 lo permite **en ese instante**; si no, no crea nada. */
 export async function emitirBoleto(pool: Ejecutor, datos: DatosEmision): Promise<ResultadoEmision> {
   const { rows: modulos } = await pool.query<FilaModulo>(
-    `SELECT codigo, nombre, activo, orden FROM core.modulos WHERE codigo = $1`,
+    `SELECT codigo, nombre, url_base, activo, orden FROM core.modulos WHERE codigo = $1`,
     [datos.modulo],
   );
   const modulo: Modulo | null = modulos[0] ?? null;
@@ -202,7 +203,8 @@ async function canjeEnTransaccion(
             u.es_admin AS u_es_admin, u.activo AS u_activo,
             a.usuario_id AS a_usuario_id, a.modulo AS a_modulo,
             a.usuario_modulo AS a_usuario_modulo, a.activo AS a_activo,
-            m.codigo AS m_codigo, m.nombre AS m_nombre, m.activo AS m_activo, m.orden AS m_orden
+            m.codigo AS m_codigo, m.nombre AS m_nombre, m.url_base AS m_url_base,
+            m.activo AS m_activo, m.orden AS m_orden
        FROM quemado q
        LEFT JOIN core.usuarios u ON u.id = q.usuario_id
        LEFT JOIN core.accesos a ON a.usuario_id = q.usuario_id AND a.modulo = q.modulo
@@ -262,6 +264,7 @@ async function canjeEnTransaccion(
       : {
           codigo: fila.m_codigo,
           nombre: fila.m_nombre ?? '',
+          url_base: fila.m_url_base,
           activo: fila.m_activo ?? false,
           orden: fila.m_orden ?? 0,
         };

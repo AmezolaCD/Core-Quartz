@@ -23,6 +23,12 @@ export interface Usuario {
 export interface Modulo {
   codigo: CodigoModulo;
   nombre: string;
+  /**
+   * Dónde vive el módulo. Absoluta (`https://…`) cuando está en otro dominio;
+   * relativa (`/`, `/cdh`) cuando comparte origen con el portal. La siembra la
+   * migración desde `CQ_URL_CRM` y `CQ_URL_CDH`.
+   */
+  url_base: string | null;
   activo: boolean;
   orden: number;
 }
@@ -121,10 +127,14 @@ export interface DatosEnlaceCrm {
   supabaseUrl: string;
   anon: string;
   tokenHash: string;
+  /** `core.modulos.url_base` del CRM. Absoluta manda; relativa o ausente, como antes. */
+  urlBase?: string | null;
 }
 
 export interface DatosEnlaceCdh {
   /** Ya normalizada con `normalizarBasePath` (`''` o `'/algo'`). */
   basePathCdh: string;
   codigo: string;
+  /** `core.modulos.url_base` del CDH. Absoluta manda sobre `basePathCdh`. */
+  urlBase?: string | null;
 }

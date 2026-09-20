@@ -58,6 +58,9 @@ export function rutasModulos(deps: Dependencias): Router {
           supabaseUrl: deps.config.supabaseUrl,
           anon: deps.config.supabaseAnon,
           tokenHash,
+          // El CRM vive en Vercel y el portal no: sin esto el 302 caería
+          // dentro del propio host del portal (fase 08).
+          urlBase: modulo.url_base,
         }),
       );
       return;
@@ -78,7 +81,14 @@ export function rutasModulos(deps: Dependencias): Router {
         .json({ error: estado === 404 ? MENSAJES.desconocido : MENSAJES.sinAcceso });
       return;
     }
-    respuesta.redirect(302, enlaceCdh({ basePathCdh: deps.config.basePathCdh, codigo: emision.codigo }));
+    respuesta.redirect(
+      302,
+      enlaceCdh({
+        basePathCdh: deps.config.basePathCdh,
+        codigo: emision.codigo,
+        urlBase: modulo.url_base,
+      }),
+    );
   });
 
   return rutas;
