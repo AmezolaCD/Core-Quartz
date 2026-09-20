@@ -22,7 +22,11 @@ jobs:
       pg:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: pruebas
+          # Sin contraseña a propósito. El contenedor es desechable y sólo lo
+          # alcanza este job, así que la contraseña no protegía nada — y metía
+          # una cadena de conexión con credencial en un repositorio público,
+          # que es justo lo que el job `secretos` busca. Lo encontró.
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -33,7 +37,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL_TEST: postgres://postgres:pruebas@127.0.0.1:5432/postgres
+      DATABASE_URL_TEST: postgres://postgres@127.0.0.1:5432/postgres
       # Las pruebas de las fases 03 y 06 leen el `index.html` y el SQL del CRM
       # desde un clon suyo.
       CRM_REPO: ${{ github.workspace }}/crm
