@@ -35,8 +35,42 @@ async function archivos(): Promise<string[]> {
   return nombres.filter((n) => n.endsWith('.sql')).sort();
 }
 
-/** Aplica las migraciones pendientes y devuelve los nombres aplicados en esta corrida. */
+/**
+ * Llave del lock de migración. Un número fijo y propio: `pg_advisory_lock`
+ * comparte un espacio global por base, así que conviene que no se parezca a
+ * nada de nadie.
+ */
+const LLAVE_LOCK = 7_249_003_118_540_212n;
+
+/**
+ * Aplica las migraciones pendientes y devuelve los nombres aplicados en esta corrida.
+ *
+ * Todo el recorrido va bajo un `pg_advisory_lock`: desde la fase 08 esto corre
+ * **al arrancar el servidor**, y dos contenedores que arrancan a la vez —un
+ * reinicio que se solapa, por ejemplo— verían la misma migración pendiente y la
+ * aplicarían los dos.
+ *
+ * Y no es un riesgo de mañana: sin el lock, la prueba de dos migradores
+ * simultáneos falla las cinco de cada cinco veces con «duplicate key value
+ * violates unique constraint "pg_namespace_nspname_index"». Ni siquiera el
+ * `create schema if not exists` del principio aguanta la carrera; Postgres
+ * resuelve el `if not exists` antes de insertar, no de forma atómica.
+ *
+ * El lock es de sesión y se suelta en el `finally` sobre el mismo cliente, que
+ * es la única forma de soltarlo.
+ */
 export async function migrar(pool: Pool): Promise<string[]> {
+  const guardia = await pool.connect();
+  try {
+    await guardia.query('SELECT pg_advisory_lock($1)', [LLAVE_LOCK.toString()]);
+    return await migrarConLlave(pool);
+  } finally {
+    await guardia.query('SELECT pg_advisory_unlock($1)', [LLAVE_LOCK.toString()]).catch(() => undefined);
+    guardia.release();
+  }
+}
+
+async function migrarConLlave(pool: Pool): Promise<string[]> {
   await prepararRegistro(pool);
 
   const { rows } = await pool.query<{ nombre: string }>('SELECT nombre FROM core.migraciones');
