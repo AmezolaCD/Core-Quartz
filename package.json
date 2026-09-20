@@ -15,7 +15,8 @@
     "test:api": "node --test \"test/api/**/*.test.ts\"",
     "admin:crear": "node src/cli/crear-admin.ts",
     "iniciar": "node src/index.ts",
-    "test:crm-sso": "node --test \"test/crm-sso/**/*.test.ts\""
+    "test:crm-sso": "node --test \"test/crm-sso/**/*.test.ts\"",
+    "test:ui": "node --test \"test/ui/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
