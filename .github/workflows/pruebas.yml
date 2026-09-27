@@ -76,6 +76,12 @@ jobs:
       - run: npm run test:crm-sso
       - run: npm run test:ui
 
+      # Fase 09. Sin staging configurado, lo que corre es el guardia contra
+      # producción —que no necesita red ni entorno— y los seis recorridos
+      # quedan como `todo`. Es a propósito: el guardia es lo que impide que
+      # estas pruebas toquen producción, así que se comprueba en cada PR.
+      - run: npm run test:e2e
+
   secretos:
     runs-on: ubuntu-latest
     steps:
