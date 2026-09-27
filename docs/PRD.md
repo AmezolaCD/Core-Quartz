@@ -1,7 +1,10 @@
 # Core Quartz · PRD (v1)
 
-> Estado: **aprobado** (16 sep 2026), con la revisión «un solo dominio» (§5).
-> Fecha: 16 sep 2026 · Autor: Juan Arango (con Claude)
+> Estado: **aprobado** (16 sep 2026). La revisión «un solo dominio» del §5 **quedó atrás**: al
+> cerrar la fase 08 se decidió que el CRM se queda en Vercel y el portal y el CDH viven en su propio
+> origen (decisión #39). El §5, el §9 y el §10 están corregidos; el resto del documento es el
+> aprobado.
+> Fecha: 16 sep 2026 · corregido el 27 sep 2026 · Autor: Juan Arango (con Claude)
 
 ## 1. Problema
 
@@ -59,28 +62,49 @@ módulos que ya existen y a los que se sumen después.
 
 ## 5. Arquitectura v1
 
-Todo vive bajo **un solo dominio, el del CRM: `https://core-quartz.vercel.app`**.
+> **Corregido el 27 sep 2026, al cerrar la fase 08.** Esta sección describía **un solo dominio**,
+> `core-quartz.vercel.app`, con Vercel reenviando `/portal` y `/cdh` a una VM. Se decidió otra cosa
+> (decisión #39, que supera la #31) y lo que sigue es la arquitectura real. Lo que cambió, en una
+> línea: **el CRM se queda solo en Vercel; el portal y el CDH viven en su propio origen con su
+> propio HTTPS, y las reescrituras de Vercel pasan a ser opcionales.** El motivo y el camino están
+> en `docs/phases/phase-08-despliegue.md`.
 
-| Ruta pública | Qué sirve | Dónde corre |
+Son **dos orígenes**, no uno:
+
+| Dirección pública | Qué sirve | Dónde corre |
 |---|---|---|
-| `/` (y `#firmar=`, `#nube=`) | **CRM**, sin cambios de dirección | Vercel (estático) |
-| `/portal/…` | **Shell** de Core Quartz | VM, reenviado por Vercel |
-| `/cdh/…` | **CDH** | VM, reenviado por Vercel |
+| `https://core-quartz.vercel.app/` (y `#firmar=`, `#nube=`) | **CRM**, sin cambios de dirección | Vercel (estático) |
+| `https://<CQ_ORIGEN>/portal/…` | **Shell** de Core Quartz | Máquina propia, detrás de Caddy |
+| `https://<CQ_ORIGEN>/cdh/…` | **CDH** | La misma máquina, detrás del mismo Caddy |
+
+`CQ_ORIGEN` es un dominio que apunta a esa máquina; sin comprar nada sirve
+`<ip-con-guiones>.sslip.io` con Let's Encrypt (decisión #35).
 
 ```
- navegador ──► core-quartz.vercel.app ──┬─ /            → index.html del CRM (Vercel)
- (PC o celular)        (Vercel)          ├─ /portal/*   ─┐  reescritura externa
-                                         └─ /cdh/*      ─┤  (vercel.json del repo del CRM)
-                                                         ▼
-                      ┌──────────── VM · origen HTTPS (Caddy) ────────────┐
-                      │  /portal/* → shell (Node 22 + TS + Express 5)      │
-                      │                 ▲ canje de boleto: red interna     │
-                      │  /cdh/*    → cdh (CDH_BASE_PATH=/cdh)              │
-                      └─────────────────┼──────────────────────────────────┘
-                                        │ pg (esquema `core`) + Supabase Auth (admin)
-                                        ▼
-                               Supabase (mismo proyecto del CRM)
+ navegador ──┬──► core-quartz.vercel.app ── /  → index.html del CRM (Vercel, estático)
+ (PC o       │
+  celular)   └──► <CQ_ORIGEN> ─┌──────────── origen HTTPS (Caddy) ───────────┐
+                               │  /portal/* → shell (Node 22 + TS + Express) │
+                               │                 ▲ canje de boleto:          │
+                               │                 │ red interna de Docker,    │
+                               │                 │ 404 desde fuera           │
+                               │  /cdh/*    → cdh (CDH_BASE_PATH=/cdh)       │
+                               │  cualquier otra ruta → 404                  │
+                               └─────────────────┼───────────────────────────┘
+                                                 │ pg (esquema `core`)
+                                                 │ + Supabase Auth (admin)
+                                                 ▼
+                                        Supabase (mismo proyecto del CRM)
 ```
+
+El portal manda al CRM con una dirección **absoluta**, que sale de `core.modulos.url_base`
+(sembrada desde `CQ_URL_CRM`). Con un enlace relativo la entrada al CRM redirigiría dentro del
+propio host del portal y no funcionaría: es la consecuencia directa de que sean dos orígenes.
+
+**Si más adelante se quiere el dominio único** —Vercel reenviando `/portal` y `/cdh` a este
+origen— se puede añadir encima sin cambiar nada de lo de arriba, y entonces hay que medir lo que
+la fase 08 dejó anotado: tamaño máximo de petición, tiempo de espera y qué cabecera trae la IP
+del cliente.
 
 - **Shell**: Node 22, TypeScript ejecutado con el *type stripping* nativo de Node (sin paso de
   compilación; `tsc --noEmit` sólo verifica tipos), Express 5, `pg`, montado bajo `/portal`.
@@ -89,11 +113,13 @@ Todo vive bajo **un solo dominio, el del CRM: `https://core-quartz.vercel.app`**
 - **CDH**: gana soporte de **prefijo de ruta** (`CDH_BASE_PATH`, vacío por omisión = como hoy). Su
   enrutador ya usa `#/…`, así que basta con que sus rutas a `/api`, `/css`, `/js` y fotos respeten el
   prefijo.
-- **Vercel** sólo reenvía (`rewrites` hacia el origen de la VM). La VM necesita un nombre con HTTPS
-  propio para ser origen: un dominio cualquiera o, sin comprar nada, `<ip-con-guiones>.sslip.io` con
-  certificado de Let's Encrypt vía Caddy.
-- **Cookies separadas por ruta** en el mismo dominio: `cq_sesion` con `Path=/portal`,
-  `cdh_session` con `Path=/cdh`.
+- **Vercel** sirve el CRM y nada más: **no reenvía nada** (corregido el 27 sep 2026; antes decía
+  que reenviaba `/portal` y `/cdh` al origen). La máquina del portal necesita su propio nombre con
+  HTTPS: un dominio cualquiera o, sin comprar nada, `<ip-con-guiones>.sslip.io` con certificado de
+  Let's Encrypt vía Caddy.
+- **Cookies separadas por ruta** dentro de `CQ_ORIGEN`, que el portal y el CDH **sí** comparten:
+  `cq_sesion` con `Path=/portal`, `cdh_session` con `Path=/cdh`. La decisión #34 sigue en pie por
+  ese motivo, aunque el CRM haya quedado en otro origen.
 - **Base de datos**: el **mismo Postgres de Supabase** que usa el CRM, en un esquema propio `core`
   (no toca `public.crm_*` salvo la fase 03).
 - **Cuentas**: **Supabase Auth**. Los usuarios del CRM conservan su correo y contraseña.
@@ -101,25 +127,33 @@ Todo vive bajo **un solo dominio, el del CRM: `https://core-quartz.vercel.app`**
   `core-quartz.vercel.app/` dentro.
 - **El CDH conserva su base, su bitácora y su puerta única de escritura** (`recordMovement`).
 
-**Riesgos de compartir dominio** (se verifican en la fase 08):
+**Riesgos, revisados al cerrar la fase 08:**
 
-1. **Mismo origen para las tres aplicaciones**: comparten `localStorage` y un fallo de XSS en una
-   alcanza a las otras. Mitigación: las tres escapan todo HTML dinámico (ya es la norma en CRM y CDH),
-   cabecera `Content-Security-Policy` en `/portal`, y el shell no guarda nada en `localStorage`.
-2. **Límites de Vercel en reescrituras externas** (tamaño de petición y tiempo de espera): las fotos
-   del CDH (hasta 8 por envío) podrían superarlos. Fase 08 lo mide; si falla, el CDH reduce las fotos
-   en el navegador antes de subirlas o el límite por envío baja.
-3. **IP del cliente**: el límite de intentos de entrada usa la IP que Vercel reenvía; si no es
-   confiable, se limita además por correo.
-4. **Origen expuesto**: la VM también responde directo (sin Vercel). No abre nada nuevo —mismas
-   cuentas—, pero Caddy rechaza `/portal/api/sso/*` desde fuera.
+1. **Origen compartido entre el portal y el CDH.** Ya no son las tres aplicaciones: el CRM quedó en
+   otro origen, así que un XSS en el CRM no alcanza al portal ni al revés. Entre el portal y el CDH
+   sí, porque comparten `CQ_ORIGEN`. Mitigación, ya implementada: los tres escapan todo HTML
+   dinámico, el portal manda `Content-Security-Policy` (`script-src 'self'`, `style-src 'self'`, sin
+   nada en línea) y **no guarda nada en `localStorage` ni en `sessionStorage`**, comprobado por
+   prueba.
+2. ~~**Límites de Vercel en reescrituras externas.**~~ **Ya no aplica**, porque no hay reescritura:
+   las fotos del CDH viajan directas a su origen. Vuelve a aplicar sólo si algún día se añade el
+   dominio único, y entonces hay que medirlo antes.
+3. **IP del cliente**: la pone **Caddy**, no Vercel. El límite de intentos de entrada cuenta además
+   **por correo**, así que cambiar de IP no regala intentos nuevos sobre la misma cuenta — eso se
+   hizo así desde la fase 04 y no depende de en quién se confíe.
+4. **Origen expuesto a internet.** Sigue en pie y es el riesgo vivo: la máquina responde directo.
+   No abre nada nuevo —mismas cuentas—, y **Caddy responde 404 a `/portal/api/sso/*` desde fuera**,
+   comprobado con un Caddy real. El portal además no publica puerto: sólo se llega a él por Caddy.
+5. **Dos orígenes significan que el enlace al CRM es absoluto** (arriba). Si `core.modulos.url_base`
+   del CRM quedara relativa, la entrada al CRM se rompería en silencio. `deploy/verificar.sh` lo
+   revisa a propósito.
 
 ### Cómo se entra a cada módulo
 
 | Módulo | Mecanismo | Resumen |
 |---|---|---|
 | **CDH** | **Boleto de un solo uso + canje por canal interno** | El shell emite un código aleatorio (60 s). El navegador va a `/cdh/api/auth/sso?codigo=…`. El CDH lo canjea contra el shell por la red interna con un secreto compartido, recibe el usuario del CDH y crea **su propia sesión** con `createSession()`. |
-| **CRM** | **Enlace mágico de Supabase generado en el servidor** | El shell pide a Supabase Auth (API admin, `generate_link`, que **no envía correo**) un `token_hash` para el correo de la persona y redirige a `/#nube=…&cq=<token_hash>` (mismo dominio). El CRM lo verifica (`POST /auth/v1/verify`) y obtiene **su propia sesión**. |
+| **CRM** | **Enlace mágico de Supabase generado en el servidor** | El shell pide a Supabase Auth (API admin, `generate_link`, que **no envía correo**) un `token_hash` para el correo de la persona y redirige a la raíz del CRM con `#nube=…&cq=<token_hash>` (dirección absoluta: vive en otro origen). El CRM lo verifica (`POST /auth/v1/verify`) y obtiene **su propia sesión**. |
 
 Ninguno comparte tokens de refresco entre aplicaciones: cada módulo termina con su sesión propia.
 
@@ -246,8 +280,12 @@ respeta el flujo actual del CDH.
    (`public.crm_datos` con `tipo = 'usuarios'`, `borrado = false`, `datos->>'correo'` igual sin
    mayúsculas). Si no, 409 «Primero dalo de alta en CRM → Ajustes → Usuarios y permisos».
    Esta misma regla se valida **al asignar** el acceso (R7).
-3. El shell pide `generate_link(type: magiclink, email)` y redirige a
-   `/#nube=<b64url({u,k})>&cq=<hashed_token>` (la raíz del mismo dominio, donde vive el CRM).
+3. El shell pide `generate_link(type: magiclink, email)` y redirige a la **raíz del CRM** con
+   `#nube=<b64url({u,k})>&cq=<hashed_token>`. La dirección sale de `core.modulos.url_base`:
+   **absoluta** cuando el CRM está en otro origen —lo normal, porque vive en Vercel— y relativa
+   (`/#nube=…`) sólo si algún día compartieran origen. Corregido el 27 sep 2026: antes decía «la
+   raíz del mismo dominio», que con dos orígenes habría mandado a la persona al propio host del
+   portal.
    Se registra en `core.boletos` (con `modulo = 'crm'`) sólo como constancia; el uso único y la
    caducidad los impone Supabase.
 4. El CRM, **antes que nada**, lee `cq` y `nube` y limpia la barra de direcciones (ya lo hace con
@@ -331,9 +369,10 @@ se quedaría sin ver nada.
 ## 9. Restricciones de ejecución
 
 - **Debe**: Node ≥ 22.18, TypeScript sin paso de compilación, Express 5, `pg`, Postgres de Supabase,
-  Docker en la misma VM que el CDH detrás de Caddy, **todo expuesto bajo `core-quartz.vercel.app`**
-  (`/`, `/portal`, `/cdh`), HTTPS obligatorio también en el origen, español en toda la interfaz,
-  usable a 360 px.
+  Docker en la misma máquina que el CDH detrás de Caddy, **el CRM en `core-quartz.vercel.app` y el
+  portal y el CDH bajo `CQ_ORIGEN`** (`/portal`, `/cdh`) — corregido el 27 sep 2026; antes decía
+  «todo expuesto bajo `core-quartz.vercel.app`», ver §5 —, HTTPS obligatorio en los dos orígenes,
+  español en toda la interfaz, usable a 360 px.
 - **Nunca**: bundlers ni *frameworks* de interfaz; la llave `service_role` en el cliente; tocar el
   historial del CDH; cambiar la URL del CRM; correr pruebas contra el Supabase de **producción**
   (se usa Postgres local para pruebas y un proyecto Supabase de *staging* para la e2e).
@@ -342,14 +381,19 @@ se quedaría sin ver nada.
 
 ## 10. Preguntas abiertas (no bloquean la revisión)
 
-1. ~~Repositorio~~ → **`AmezolaCD/Core-Quartz`** (público). Falta darle a la sesión permiso de
-   escritura; mientras, el código se entrega en zip.
-2. ~~Dominio~~ → **`core-quartz.vercel.app`** con `/portal` y `/cdh`. Falta: ¿qué VM y qué nombre HTTPS
-   usa el origen? (`sslip.io` sirve si no hay dominio.)
-3. ¿`nube.sql`, `roles.sql` y `firmas.sql` están corridos en producción? (condiciona la fase 03).
-4. **Proyecto Supabase de staging** para la prueba e2e (gratuito): ¿lo crean ustedes?
-5. En Supabase: bajar *Email OTP expiration* a 300 s para que el enlace del CRM caduque pronto
-   (no afecta el acceso con contraseña que usa el CRM hoy).
+1. ~~Repositorio~~ ~~Falta darle a la sesión permiso de escritura; mientras, el código se entrega
+   en zip.~~ → **Cerrado.** `AmezolaCD/Core-Quartz` (público), con escritura: las fases 02 a 08 se
+   entregaron por PR y están fusionadas.
+2. ~~Dominio~~ → **Cerrado en parte** (27 sep 2026). Ya no es `core-quartz.vercel.app` con `/portal`
+   y `/cdh`: son dos orígenes, ver §5 y la decisión #39. **Sigue abierto** lo concreto: qué máquina
+   y qué nombre usa `CQ_ORIGEN` (`sslip.io` sirve si no hay dominio).
+3. **Abierto, y es lo que más pesa.** ¿`nube.sql`, `roles.sql` y `firmas.sql` están corridos en
+   producción? Hasta que `roles.sql` corra, cualquiera con una cuenta en el servidor puede bajarse
+   la cartera completa de clientes. El paso a paso está en el documento de puesta en marcha.
+4. **Abierto.** **Proyecto Supabase de staging** para la prueba e2e (gratuito): ¿lo crean ustedes?
+   La fase 09 no puede empezar sin él, y no vale producción: la prueba aborta si la detecta.
+5. **Abierto.** En Supabase: bajar *Email OTP expiration* a 300 s para que el enlace del CRM caduque
+   pronto (no afecta el acceso con contraseña que usa el CRM hoy).
 
 ## 11. Criterios de aceptación
 
