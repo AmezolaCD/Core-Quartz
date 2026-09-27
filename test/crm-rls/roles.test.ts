@@ -66,7 +66,7 @@ import {
   sembrarBuzon,
   sqlDelArbol,
 } from './apoyo-crm.ts';
-import type { Base } from './apoyo-crm.ts';
+import type { Actor, Base } from './apoyo-crm.ts';
 
 
 // ---------------------------------------------------------------------------
@@ -356,7 +356,10 @@ describe('roles.sql · el deshacer de §5 devuelve el CRM a como estaba', () => 
 
       assert.deepEqual(
         await politicas(base),
-        ['cliente lee su convenio', 'equipo edita', 'equipo inserta', 'equipo lee', 'equipo lee bitacora'],
+        // `cliente lee su documento` se llamaba `cliente lee su convenio` hasta
+        // sep 2026: el enlace de firma sirve ahora para convenios **y**
+        // contratos de hospedaje, y el nombre lo dice.
+        ['cliente lee su documento', 'equipo edita', 'equipo inserta', 'equipo lee', 'equipo lee bitacora'],
         'no debe quedar ni una política de roles.sql, y sí las de nube.sql y firmas.sql',
       );
 
@@ -405,10 +408,18 @@ describe('roles.sql · el deshacer de §5 devuelve el CRM a como estaba', () => 
     }
   });
 
-  // El escenario que reprodujo la revisión, y el que de verdad se va a dar: si
-  // la lista de usuarios nunca llegó a la nube, `roles.sql` deja a TODO el
-  // mundo en `ninguno` y nadie ve nada. El administrador corre el deshacer para
-  // salir del apuro; `crm_datos` vuelve, y el buzón no, sin un solo aviso.
+  // El escenario que reprodujo la revisión, y el que de verdad se va a dar: la
+  // lista de usuarios nunca llegó a la nube.
+  //
+  // Esto cambió en el CRM en sep 2026 y conviene saber en qué. Antes, sin lista,
+  // TODO el mundo caía en `ninguno` y nadie veía nada: un servidor con datos al
+  // que nadie podía entrar, ni para subir la lista que lo arreglaría. El CRM
+  // añadió `crm_sin_lista()`: con la lista **completamente vacía**, quien entra
+  // cuenta como `admin`. El encierro se acabó.
+  //
+  // El costo está medido en la prueba de abajo, y no es el que dice el archivo.
+  // Aquí lo que se comprueba sigue siendo lo de siempre: que el deshacer
+  // devuelva el buzón, porque si no el CRM deja de recoger firmas sin avisar.
   it('el deshacer también devuelve el buzón cuando la lista de usuarios nunca llegó a la nube', async () => {
     const base = await baseCruda();
     try {
@@ -426,10 +437,9 @@ describe('roles.sql · el deshacer de §5 devuelve el CRM a como estaba', () => 
       }
       const firma = await sembrarBuzon(base);
 
-      // De entrada, nadie es nadie: ni Ana, la administradora.
-      assert.equal(await rolDe(base, ANA), 'ninguno', 'sin lista de usuarios, todos caen en `ninguno`');
-      assert.deepEqual(await loQueVe(base, ANA), [], 'y no ve una sola fila');
-      assert.deepEqual(await buzonQueVe(base, ANA), [], 'ni el buzón');
+      // De entrada, con la lista vacía, quien entre cuenta como `admin`
+      // (`crm_sin_lista()`). Antes de sep 2026 aquí todos caían en `ninguno`.
+      assert.equal(await rolDe(base, ANA), 'admin', 'con la lista vacía, quien entra cuenta como admin');
 
       for (const linea of deshacerCompleto(rolesSql('despues'))) await base.pool.query(linea);
       await base.pool.query(sqlDelArbol('nube.sql'));
@@ -450,6 +460,71 @@ describe('roles.sql · el deshacer de §5 devuelve el CRM a como estaba', () => 
         );
         assert.equal((await intentaMarcarAplicada(base, actor, firma)).filas, 1, `${quien} vuelve a marcar la firma`);
       }
+    } finally {
+      await base.destruir();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El arranque sin lista de usuarios: qué cuesta de verdad
+//
+// `crm_sin_lista()` es un arreglo bueno a un problema real —sin él, una lista
+// que no subió deja un servidor con datos al que nadie puede entrar—, pero su
+// justificación en `roles.sql` dice esto:
+//
+//   «con la lista vacía el CRM no le entrega la cartera a nadie, así que no hay
+//    nada que ver»
+//
+// Eso vale si la lista está vacía porque **todo** está vacío, que es el día uno.
+// No vale en el caso que motivó estas pruebas: la cartera sube y la lista no
+// —pasa, porque la lista se captura en Ajustes y se sube aparte—. Entonces sí
+// hay mucho que ver, y lo ve cualquier cuenta del servidor.
+//
+// Estas dos pruebas fijan el comportamiento tal como es hoy. No lo aprueban: si
+// el CRM lo cierra, fallan y hay que venir a cambiarlas, que es justo lo que se
+// quiere que pase.
+// ---------------------------------------------------------------------------
+
+/** Una cuenta del servidor que nunca fue del CRM: recepción, operación, una vieja. */
+const AJENA_AL_CRM: Actor = { rol: 'authenticated', correo: 'recepcion@quartz.example' };
+
+describe('roles.sql · el arranque sin lista de usuarios', () => {
+  it('con la cartera arriba y la lista sin subir, una cuenta ajena la ve entera', async () => {
+    const base = await baseCruda();
+    try {
+      await base.pool.query(sqlDelArbol('nube.sql'));
+      await base.pool.query(rolesSql('despues'));
+      await base.pool.query(sqlDelArbol('firmas.sql'));
+
+      // Catálogo y cartera arriba; la lista de usuarios NO. El caso real.
+      const subidas = SEMILLA.filter((x) => x.tipo !== 'usuarios' && x.tipo !== 'prospectos');
+      for (const f of subidas) {
+        await base.pool.query(
+          `INSERT INTO public.crm_datos (id, tipo, datos, duenio, borrado) VALUES ($1, $2, $3::jsonb, $4, $5)`,
+          [f.id, f.tipo, JSON.stringify(f.datos), f.duenio, f.borrado ?? false],
+        );
+      }
+
+      assert.equal(await rolDe(base, AJENA_AL_CRM), 'admin', 'sin lista, una cuenta ajena cuenta como admin');
+      assert.equal(
+        (await loQueVe(base, AJENA_AL_CRM)).length,
+        subidas.length,
+        'y ve la cartera completa: clientes y convenios incluidos',
+      );
+    } finally {
+      await base.destruir();
+    }
+  });
+
+  it('en cuanto la lista sube, R8 vuelve a valer: la misma cuenta no ve nada', async () => {
+    // Lo que cierra la ventana no es correr nada otra vez: es que exista la
+    // lista. Por eso en el documento de puesta en marcha el primer paso es
+    // revisarla, y no correr `roles.sql`.
+    const base = await baseDelCRM('despues');
+    try {
+      assert.equal(await rolDe(base, AJENA_AL_CRM), 'ninguno');
+      assert.deepEqual(await loQueVe(base, AJENA_AL_CRM), [], 'ni una fila');
     } finally {
       await base.destruir();
     }
