@@ -24,19 +24,42 @@
 --    `nologin` porque nadie se conecta como ellos: la prueba entra como
 --    `postgres` y hace `set local role`, igual que PostgREST. `noinherit`
 --    para que no arrastren permisos de otra parte sin que se note.
+--
+--    Se crean atrapando la colisión en vez de preguntando antes, y la razón
+--    importa: **los roles son de todo el clúster, no de la base**. Cada archivo
+--    de prueba usa su propia base desechable, pero `node --test` corre los
+--    archivos EN PARALELO y los tres roles son los mismos para todos. Con un
+--    `if not exists`, dos archivos preguntan a la vez, los dos ven que no está
+--    y los dos lo crean: gana uno y el otro se cae con «duplicate key value
+--    violates unique constraint "pg_authid_rolname_index"». El `if not exists`
+--    de Postgres no es atómico; es el mismo fallo que tenía el migrador.
+--
+--    En una máquina donde ya se corrieron las pruebas no se ve nunca, porque
+--    los roles ya existen de una corrida anterior y el guardia corta antes de
+--    la carrera. Aparece en un clúster limpio, que es exactamente lo que el CI
+--    levanta en cada corrida. Ahí fue donde salió.
+--
+--    Un bloque por rol: si uno ya existe, los otros se crean igual.
 -- ---------------------------------------------------------------------------
 do $$
 begin
-  if not exists (select 1 from pg_roles where rolname = 'anon') then
-    create role anon nologin noinherit;
-  end if;
-  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
-    create role authenticated nologin noinherit;
-  end if;
-  if not exists (select 1 from pg_roles where rolname = 'service_role') then
-    -- Existe por fidelidad: el CRM no lo usa desde el navegador (invariante 5).
-    create role service_role nologin noinherit bypassrls;
-  end if;
+  create role anon nologin noinherit;
+exception when duplicate_object or unique_violation then null;
+end;
+$$;
+
+do $$
+begin
+  create role authenticated nologin noinherit;
+exception when duplicate_object or unique_violation then null;
+end;
+$$;
+
+do $$
+begin
+  -- Existe por fidelidad: el CRM no lo usa desde el navegador (invariante 5).
+  create role service_role nologin noinherit bypassrls;
+exception when duplicate_object or unique_violation then null;
 end;
 $$;
 

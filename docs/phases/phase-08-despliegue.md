@@ -105,11 +105,23 @@ Lo que hay que resolver aquí, antes de escribir un solo `rewrite`:
    cuando no, con lo que sirve para las dos arquitecturas. Cuesta tocar la prueba de la fase 01
    que hoy exige que empiecen con `/` y nunca con `http`.
 
-3. **El PRD §5 y §10.2 quedan desactualizados.** El diseño «un solo dominio» —y con él las
-   decisiones #31, #32 y #34, y la separación de cookies por `Path`— se apoya en que las tres
-   aplicaciones compartan origen. Con el CDH en una tailnet eso deja de valer, y conviene
-   corregir el PRD antes que el código.
+3. ~~**El PRD §5 y §10.2 quedan desactualizados.**~~ **Hecho el 27 sep 2026.** (De paso: el §10.2
+   no existe. Son el **§5**, el **§9** —que exigía «todo expuesto bajo `core-quartz.vercel.app`»— y
+   las preguntas 1 y 2 del **§10**.)
 
-4. **Qué se mide contra Vercel** (arriba, en el alcance) depende de todo lo anterior: si no hay
-   reescritura, no hay límite de tamaño ni de espera que medir, y la IP del cliente la pone
-   Tailscale o Caddy, no Vercel.
+   Se corrigió lo que se volvió falso y nada más: el §5 describe los dos orígenes y dice qué decía
+   antes y por qué cambió; sus «riesgos de compartir dominio» se revisaron uno por uno —el de
+   Vercel ya no aplica, el de la IP la pone Caddy, y el del origen expuesto sigue vivo—; y en el
+   §10 se cerraron las dos preguntas que llevaban fases resueltas.
+
+   En `DECISIONS.md` la **#31 no se borró**: queda marcada como superada por la **#39**, que es la
+   nueva, más la **#40** por los enlaces con `url_base`. Un registro de decisiones se supera, no se
+   reescribe.
+
+   De las tres decisiones que este punto daba por tocadas, sólo cayó la #31. La **#32** («el CRM se
+   queda en la raíz») sigue valiendo, y la **#34** (cookies separadas por `Path`) también: el portal
+   y el CDH **sí** comparten origen entre ellos, que es de donde salía su motivo.
+
+4. ~~**Qué se mide contra Vercel**~~ **Resuelto por la decisión #39**: no hay reescritura, así que no
+   hay límite de tamaño ni de espera que medir, y la IP del cliente la pone Caddy. Vuelve a aplicar
+   sólo si algún día se añade el dominio único encima, y entonces se mide antes de añadirlo.
