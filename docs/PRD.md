@@ -387,9 +387,26 @@ se quedaría sin ver nada.
 2. ~~Dominio~~ → **Cerrado en parte** (27 sep 2026). Ya no es `core-quartz.vercel.app` con `/portal`
    y `/cdh`: son dos orígenes, ver §5 y la decisión #39. **Sigue abierto** lo concreto: qué máquina
    y qué nombre usa `CQ_ORIGEN` (`sslip.io` sirve si no hay dominio).
-3. **Abierto, y es lo que más pesa.** ¿`nube.sql`, `roles.sql` y `firmas.sql` están corridos en
-   producción? Hasta que `roles.sql` corra, cualquiera con una cuenta en el servidor puede bajarse
-   la cartera completa de clientes. El paso a paso está en el documento de puesta en marcha.
+3. ~~¿`nube.sql`, `roles.sql` y `firmas.sql` están corridos en producción?~~ → **Cerrado el 27 sep
+   2026**: Juan los aplicó. Con `roles.sql` vivo, el blindaje R8 ya protege la cartera en producción,
+   que era lo único urgente de todo el proyecto.
+
+   `firmas.sql` falló en el primer intento con `42P13: cannot change name of input parameter "p_doc"`
+   —una copia vieja del archivo, sin los dos `drop` que la versión actual hace antes de recrear la
+   función— y entró al correr el archivo actual. Queda anotado porque el editor de Supabase revierte
+   el script entero al fallar: un «Success» en la segunda mitad no dice nada de la primera.
+
+   **Comprobado con gente de verdad el 12 oct 2026**, que es lo que faltaba y no es lo mismo que
+   aplicarlo. Juan verificó los cuatro puntos que importan, cada uno con una cuenta real del hotel:
+   un ejecutivo sigue viendo su cartera, una gerencia sigue viendo el trabajo de todo su equipo,
+   banquetes ve sus eventos y no ve convenios de hospedaje, y un cliente abre su enlace de firma,
+   firma, y esa firma le llega a su ejecutivo. Es decir: el blindaje R8 no rompió a nadie que ya
+   trabajaba, que era el riesgo real de aplicarlo.
+
+   Queda una sola comprobación de la lista, por el lado contrario: que una cuenta **fuera** de
+   *Usuarios y permisos* no alcance ni una fila. Es la que mide el blindaje por el lado de quien no
+   debería ver, y basta cualquier cuenta del hotel ajena al CRM para cerrarla. La lista completa está
+   en el documento de puesta en marcha.
 4. **Abierto.** **Proyecto Supabase de staging** para la prueba e2e (gratuito): ¿lo crean ustedes?
    La fase 09 no puede empezar sin él, y no vale producción: la prueba aborta si la detecta.
 5. **Abierto.** En Supabase: bajar *Email OTP expiration* a 300 s para que el enlace del CRM caduque

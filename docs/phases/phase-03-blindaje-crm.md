@@ -25,6 +25,11 @@ roles `anon` / `authenticated`.
 **No** se toca `nube.sql` ni nada más de `index.html`. **No** se aplica en producción en esta fase:
 se entrega el SQL y una nota con la condición previa del PRD §7-R8.
 
+**Aplicado después, fuera de la fase**: Juan corrió `roles.sql` y `firmas.sql` en producción el 27
+sep 2026 y comprobó el 12 oct 2026 que el blindaje no rompió a nadie que ya trabajaba (ejecutivo,
+gerencia, banquetes y el enlace de firma del cliente). Detalle y lo que queda por comprobar en el
+PRD §10.3.
+
 ## Archivos
 - CRM: `roles.sql` (función `crm_rol` y cláusulas `case` de las tres políticas)
 - CRM: `firmas.sql` (guarda de papel en `equipo lee firmas` y `equipo marca firmas`)
