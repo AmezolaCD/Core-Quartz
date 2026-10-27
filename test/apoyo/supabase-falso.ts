@@ -33,6 +33,8 @@ export interface SupabaseFalso {
   agregar(correo: string, contrasena: string, id?: string): CuentaFalsa;
   /** Último `hashed_token` entregado por `generate_link`. */
   ultimoTokenHash: string | null;
+  /** Enlaces mágicos emitidos y todavía sin canjear, por `hashed_token`. */
+  enlacesVivos: Map<string, string>;
   cerrar(): Promise<void>;
 }
 
@@ -52,14 +54,31 @@ export async function levantarSupabaseFalso(): Promise<SupabaseFalso> {
   const cuentas = new Map<string, CuentaFalsa>();
   const llamadas: LlamadaSupabase[] = [];
   const estado = { ultimoTokenHash: null as string | null };
+  /** `hashed_token` → correo, mientras el enlace no se haya canjeado. */
+  const enlacesVivos = new Map<string, string>();
 
   const servidor: Server = createServer(async (peticion, respuesta) => {
     const url = new URL(peticion.url ?? '/', 'http://local');
     const cuerpo = await leerCuerpo(peticion);
     llamadas.push({ metodo: peticion.method ?? 'GET', ruta: url.pathname + url.search, cuerpo });
 
+    // Supabase contesta desde otro origen que el de la página, así que manda
+    // CORS en todo. Sin esto el navegador ni siquiera deja salir la petición,
+    // y el simulador parecía sano porque hasta ahora sólo lo llamaba el shell
+    // desde el servidor, donde no hay CORS que valga.
+    const CORS = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'authorization, apikey, content-type, x-client-info',
+      'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    };
+    if (peticion.method === 'OPTIONS') {
+      respuesta.writeHead(204, CORS);
+      respuesta.end();
+      return;
+    }
+
     const responder = (estadoHttp: number, datos: unknown): void => {
-      respuesta.writeHead(estadoHttp, { 'content-type': 'application/json' });
+      respuesta.writeHead(estadoHttp, { 'content-type': 'application/json', ...CORS });
       respuesta.end(JSON.stringify(datos));
     };
     const datos = cuerpo as Record<string, string>;
@@ -98,8 +117,41 @@ export async function levantarSupabaseFalso(): Promise<SupabaseFalso> {
       if (!cuenta) return responder(404, { msg: 'User not found' });
       const hash = `th_${randomUUID().replace(/-/g, '')}`;
       estado.ultimoTokenHash = hash;
+      // Queda vivo hasta que alguien lo canje: Supabase los deja usar una sola
+      // vez, y de eso depende que un enlace reenviado no abra una sesión.
+      enlacesVivos.set(hash, cuenta.correo);
       return responder(200, {
         properties: { hashed_token: hash, action_link: `https://ejemplo/verify?token=${hash}` },
+        user: { id: cuenta.id, email: cuenta.correo },
+      });
+    }
+
+    // R5.3, el otro extremo: el CRM canjea en el NAVEGADOR el `hashed_token`
+    // que el portal emitió en el servidor. Es la costura entre las dos
+    // aplicaciones, y sin esta ruta el simulador sólo cubría la mitad del
+    // camino: el portal entregaba un enlace que nadie podía usar.
+    if (peticion.method === 'POST' && url.pathname === '/auth/v1/verify') {
+      if (datos.type !== 'magiclink') {
+        return responder(400, { error: 'invalid_request', msg: 'type no soportado' });
+      }
+      const correo = enlacesVivos.get(String(datos.token_hash ?? ''));
+      if (correo === undefined) {
+        // Mismo cuerpo que Supabase ante un enlace gastado o inventado: el CRM
+        // enseña `error_description`, y la fase 06 lo mide.
+        return responder(401, {
+          error: 'invalid_token',
+          error_description: 'Email link is invalid or has expired',
+          msg: 'Email link is invalid or has expired',
+        });
+      }
+      // De un solo uso: se quema al canjearlo, no al emitirlo.
+      enlacesVivos.delete(String(datos.token_hash));
+      const cuenta = cuentas.get(correo)!;
+      return responder(200, {
+        access_token: `falso.${cuenta.id}`,
+        refresh_token: `refresh.${cuenta.id}`,
+        token_type: 'bearer',
+        expires_in: 3600,
         user: { id: cuenta.id, email: cuenta.correo },
       });
     }
@@ -119,6 +171,15 @@ export async function levantarSupabaseFalso(): Promise<SupabaseFalso> {
       // R6: `ban_duration: 'none'` es el desbloqueo.
       cuenta.bloqueada = datos.ban_duration !== undefined && datos.ban_duration !== 'none';
       return responder(200, { id: cuenta.id, email: cuenta.correo });
+    }
+
+    // PostgREST, lo mínimo. El CRM sincroniza en cuanto abre sesión, y sin esto
+    // la primera pantalla que ve quien acaba de entrar trae un 404 en la
+    // consola. Devuelve vacío a secas: un proyecto recién hecho no tiene nada,
+    // y lo que guarda el CRM no es asunto de estas pruebas.
+    if (url.pathname.startsWith('/rest/v1/')) {
+      if (peticion.method === 'GET') return responder(200, []);
+      if (peticion.method === 'POST' || peticion.method === 'PATCH') return responder(201, []);
     }
 
     return responder(404, { msg: 'ruta desconocida en el Supabase falso' });
@@ -145,6 +206,7 @@ export async function levantarSupabaseFalso(): Promise<SupabaseFalso> {
     get ultimoTokenHash() {
       return estado.ultimoTokenHash;
     },
+    enlacesVivos,
     cerrar: () => {
       // Igual que el servidor del shell: sin esto, los sockets keep-alive del
       // cliente mantienen vivo el simulador y el cierre nunca termina.

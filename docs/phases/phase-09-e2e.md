@@ -45,20 +45,46 @@ Recorridos:
 6. Los recorridos 1 y 2 repetidos a 360 × 740.
 
 ## Archivos
-- `test/e2e/recorrido.test.ts`, `test/e2e/preparar-staging.ts` (siembra y limpia usuarios `*@e2e.example`)
+- `test/e2e/recorrido.test.ts` (el guardia y los recorridos)
+- `test/e2e/entorno.ts` (**staging** o **ensayo**, detrás de una sola interfaz)
+- `test/e2e/preparar-staging.ts` (se niega a tocar producción; siembra y limpia `*@e2e.example`)
+- `test/apoyo/supabase-falso.ts` (CORS, `/auth/v1/verify` y `/rest/v1/`: ver más abajo)
 - `package.json` (script `test:e2e`)
-- `docs/E2E.md` (cómo preparar staging)
+- `docs/E2E.md` (cómo preparar staging, y qué corre sin él)
 
 ## Criterios de aceptación
-- [ ] Los seis recorridos pasan dos veces seguidas (la preparación es idempotente).
-- [ ] El comentario del recorrido 1 aparece en el historial del CDH **a nombre del usuario ligado a Ana**.
-- [ ] Al terminar no quedan usuarios `*@e2e.example` activos.
-- [ ] Todas las casillas de «Criterios de aceptación» del PRD quedan marcadas con evidencia (enlace a la corrida).
+- [x] **Los seis recorridos están escritos** y corren con un navegador de verdad, en el entorno que
+      haya. Los selectores salen de las tres interfaces reales (`public/js/vistas/` del portal, el
+      `index.html` del CRM, `public/js/views/` del CDH), no están inventados.
+- [x] **Lo que no se puede medir se salta diciendo qué le falta**, nunca pasa en falso. Sin staging
+      corren 1a, 2, 4, 5a y 6; se saltan 1b, 3 y 5b.
+- [x] Pasan **dos veces seguidas** (la siembra es idempotente: reencuentra la cuenta de Supabase y
+      vuelve a crear la fila de `core`, que `limpiarE2E` se llevó).
+- [ ] **Contra staging**: los ocho pasan. Falta el proyecto de Supabase aparte y la máquina.
+- [ ] El comentario del recorrido 1b aparece en el historial del CDH **a nombre del usuario ligado a
+      Ana** (`e2e.ana`). Necesita el CDH de verdad.
+- [ ] Al terminar no quedan usuarios `*@e2e.example` activos en staging.
+- [ ] Todas las casillas de «Criterios de aceptación» del PRD quedan marcadas con evidencia (enlace a
+      la corrida).
+
+## Lo que se encontró al escribirlos
+
+Dos cosas que sólo se ven cuando las dos aplicaciones hablan de verdad, y que ninguna prueba de las
+fases 04 a 07 podía encontrar porque todas llamaban al simulador **desde el servidor**:
+
+1. El Supabase simulado **no contestaba CORS**. El CRM vive en otro origen, así que el navegador ni
+   dejaba salir el canje del enlace mágico: la entrada al CRM no funcionaba y nada se ponía rojo.
+2. Le faltaba `/auth/v1/verify` —el portal emitía un enlace que nadie podía canjear— y `/rest/v1/`,
+   que el CRM llama en cuanto abre sesión.
 
 ## Verificación
 ```bash
+# Sin staging (lo que corre en el CI):
+npm run test:e2e
+
+# Contra staging, con .env.e2e puesto:
 bash deploy/verificar.sh            # levanta el entorno
-npm run test:e2e                    # con .env.e2e apuntando a staging
+npm run test:e2e
 ```
 
 ## Lo que decía antes

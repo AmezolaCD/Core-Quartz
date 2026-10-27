@@ -156,3 +156,142 @@ export function poolDeStaging(entorno: NodeJS.ProcessEnv = process.env): Pool {
 }
 
 export { pg };
+
+// ---------------------------------------------------------------------------
+// La gente de la e2e
+//
+// `limpiarE2E` sabía borrar desde el principio; crear, no. Esto es lo que
+// faltaba, y por eso ninguno de los seis recorridos había podido correr: el
+// recorrido 3 mide que Carla NO alcanza nada del CRM, y eso sólo significa algo
+// si Carla existe de verdad, con su cuenta y su acceso puesto.
+// ---------------------------------------------------------------------------
+
+/** Una persona del PRD §7, tal como queda sembrada en staging. */
+export interface PersonaE2E {
+  clave: 'ana' | 'beto' | 'carla';
+  nombre: string;
+  esAdmin: boolean;
+  /** `usuario_modulo` sólo lo lleva el CDH; el CRM va por correo. */
+  accesos: Array<{ modulo: 'crm' | 'cdh'; usuarioModulo: string | null }>;
+}
+
+/**
+ * Las tres que hacen falta para los seis recorridos.
+ *
+ * El `usuario_modulo` de Ana **tiene que existir y estar activo en el CDH**, o
+ * el canje se rechaza del lado del CDH y el recorrido 1 falla donde no es. Es
+ * el único dato de esta lista que depende de otra máquina, y por eso va a la
+ * vista y no escondido en una prueba.
+ */
+export const GENTE_E2E: readonly PersonaE2E[] = [
+  {
+    clave: 'ana',
+    nombre: 'Ana (e2e)',
+    esAdmin: true,
+    accesos: [
+      { modulo: 'crm', usuarioModulo: null },
+      { modulo: 'cdh', usuarioModulo: 'e2e.ana' },
+    ],
+  },
+  { clave: 'beto', nombre: 'Beto (e2e)', esAdmin: false, accesos: [{ modulo: 'crm', usuarioModulo: null }] },
+  {
+    clave: 'carla',
+    nombre: 'Carla (e2e)',
+    esAdmin: false,
+    accesos: [{ modulo: 'cdh', usuarioModulo: 'e2e.carla' }],
+  },
+] as const;
+
+export function correoE2E(clave: PersonaE2E['clave']): string {
+  return `${clave}${SUFIJO_E2E}`;
+}
+
+/** Lo mínimo que esta siembra necesita de Supabase. Lo cumple `crearClienteSupabase`. */
+export interface AltaDeCuentas {
+  buscarPorCorreo(correo: string): Promise<{ id: string } | null>;
+  crearUsuario(correo: string, contrasena: string): Promise<{ id: string }>;
+}
+
+/**
+ * Siembra a las tres en Supabase, en `core` y en la lista del CRM. Idempotente.
+ *
+ * Idempotente de verdad, no «vuelve a intentarlo»: el criterio de la fase pide
+ * que los seis recorridos pasen **dos veces seguidas**, y entre una corrida y
+ * otra `limpiarE2E` borra las filas de `core` pero **no la cuenta de Supabase**
+ * —borrarla dejaría sin sesión a cualquier pestaña abierta y no hace falta—.
+ * Así que la segunda vuelta siempre encuentra la cuenta hecha y el usuario por
+ * crear, y las dos ramas tienen que funcionar.
+ *
+ * Devuelve el id de cada persona, que es lo que los recorridos usan para
+ * hablarle a la administración.
+ */
+export async function sembrarGenteE2E(
+  pool: Pool,
+  cuentas: AltaDeCuentas,
+  contrasena: string,
+): Promise<Map<PersonaE2E['clave'], string>> {
+  if (contrasena.trim() === '') {
+    throw new Error('Falta la contraseña de la gente de la e2e (CQ_E2E_CONTRASENA en .env.e2e).');
+  }
+  const ids = new Map<PersonaE2E['clave'], string>();
+
+  for (const persona of GENTE_E2E) {
+    const correo = correoE2E(persona.clave);
+
+    // 1. La cuenta de Supabase: es quien manda el id, porque el token que
+    //    después llega al portal viene firmado con él.
+    const yaEstaba = await cuentas.buscarPorCorreo(correo);
+    const cuenta = yaEstaba ?? (await cuentas.crearUsuario(correo, contrasena));
+
+    // 2. La persona en `core`, con el id de la cuenta.
+    await pool.query(
+      `INSERT INTO core.usuarios (id, correo, nombre, es_admin, activo)
+            VALUES ($1::uuid, lower($2), $3, $4, true)
+       ON CONFLICT (id) DO UPDATE
+            SET correo = excluded.correo, nombre = excluded.nombre,
+                es_admin = excluded.es_admin, activo = true`,
+      [cuenta.id, correo, persona.nombre, persona.esAdmin],
+    );
+
+    // 3. Sus accesos.
+    for (const acceso of persona.accesos) {
+      await pool.query(
+        `INSERT INTO core.accesos (usuario_id, modulo, usuario_modulo, activo)
+              VALUES ($1::uuid, $2, $3, true)
+         ON CONFLICT (usuario_id, modulo) DO UPDATE
+              SET usuario_modulo = excluded.usuario_modulo, activo = true`,
+        [cuenta.id, acceso.modulo, acceso.usuarioModulo],
+      );
+    }
+    ids.set(persona.clave, cuenta.id);
+  }
+
+  // 4. La lista del CRM. Sólo quien entra al CRM: que Carla NO esté es parte de
+  //    lo que mide el recorrido 3, no un olvido.
+  await sembrarListaCrmE2E(
+    pool,
+    GENTE_E2E.filter((p) => p.accesos.some((a) => a.modulo === 'crm')).map((p) => ({
+      correo: correoE2E(p.clave),
+      nombre: p.nombre,
+      rol: p.clave === 'ana' ? 'admin' : 'ejecutivo',
+    })),
+  );
+
+  return ids;
+}
+
+/**
+ * ¿Está sembrada la lista de usuarios del CRM?
+ *
+ * El recorrido 3 **tiene que preguntarlo antes de medir R8**. Con la lista
+ * vacía, `crm_sin_lista()` del CRM deja a quien entre como `admin` y le entrega
+ * todo: Carla vería filas y la prueba se pondría roja culpando a R8, que es
+ * exactamente el fallo que invita a relajar la aserción en vez de sembrar la
+ * lista.
+ */
+export async function listaCrmSembrada(pool: Pool): Promise<boolean> {
+  const { rows } = await pool.query<{ cuantos: string }>(
+    `SELECT count(*)::text AS cuantos FROM public.crm_datos WHERE tipo = 'usuarios' AND borrado = false`,
+  );
+  return Number(rows[0]?.cuantos ?? '0') > 0;
+}
