@@ -83,8 +83,8 @@ export async function levantarCdhFalso(opciones: OpcionesCdhFalso = {}): Promise
     if (peticion.method === 'GET' && consulta) {
       // R7: el CDH no distingue mayúsculas en su `username`.
       const usuario = usuarios.get(decodeURIComponent(consulta[1] ?? '').toLowerCase());
-      if (!usuario) return responder(404, { error: 'no existe' });
-      return responder(200, { username: usuario.username, active: usuario.activo ? 1 : 0 });
+      // Igual que el CDH real: 200 siempre, con `existe` y `activo`.
+      return responder(200, { existe: !!usuario, activo: !!usuario?.activo });
     }
 
     if (peticion.method === 'POST' && url.pathname === `${basePath}/api/auth/sso/revocar`) {
