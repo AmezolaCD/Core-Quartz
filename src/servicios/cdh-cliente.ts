@@ -28,11 +28,6 @@ export interface OpcionesCdh {
   buscar?: typeof fetch;
 }
 
-/** El CDH guarda `active` como 0/1 en SQLite; también se acepta un booleano. */
-function comoActivo(valor: unknown): boolean {
-  return valor === 1 || valor === true || valor === '1';
-}
-
 export function crearClienteCdh(opciones: OpcionesCdh): ClienteCdh {
   const buscar = opciones.buscar ?? fetch;
   const base = opciones.interno.replace(/\/+$/, '');
@@ -49,8 +44,10 @@ export function crearClienteCdh(opciones: OpcionesCdh): ClienteCdh {
       });
       if (respuesta.status === 404) return null;
       if (!respuesta.ok) throw new Error(`El CDH respondió ${respuesta.status} al consultar el usuario.`);
-      const datos = (await respuesta.json()) as { username?: string; active?: unknown };
-      return { username: datos.username ?? username, activo: comoActivo(datos.active) };
+      // El contrato real del CDH (server/routes/sso.js): `{ existe, activo }`.
+      const datos = (await respuesta.json()) as { existe?: unknown; activo?: unknown };
+      if (datos.existe !== true) return null;
+      return { username, activo: datos.activo === true };
     },
 
     async revocar(usuarioModulo) {
