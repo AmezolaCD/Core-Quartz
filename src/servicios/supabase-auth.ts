@@ -44,10 +44,18 @@ export interface OpcionesSupabase {
 /** Bloqueo «para siempre» de R6; se quita con `none` al reactivar. */
 const BLOQUEO = '876000h';
 
-/** Lo que devuelve `generate_link`: el token y, de paso, la cuenta. */
+/**
+ * Lo que devuelve `generate_link`: el token y, de paso, la cuenta.
+ *
+ * Supabase ha respondido de dos formas: anidada (`properties` y `user`) y
+ * plana (los mismos campos al nivel de arriba). Se aceptan las dos.
+ */
 interface RespuestaEnlace {
   properties?: { hashed_token?: string };
+  hashed_token?: string;
   user?: { id?: string; email?: string };
+  id?: string;
+  email?: string;
 }
 
 /** Crea el cliente contra la dirección dada (en pruebas, el Supabase falso). */
@@ -102,9 +110,9 @@ export function crearClienteSupabase(opciones: OpcionesSupabase): ClienteSupabas
 
     async buscarPorCorreo(correo) {
       const datos = await generar(correo);
-      const id = datos?.user?.id;
+      const id = datos?.user?.id ?? datos?.id;
       if (!id) return null;
-      return { id, correo: (datos?.user?.email ?? correo).toLowerCase() };
+      return { id, correo: (datos?.user?.email ?? datos?.email ?? correo).toLowerCase() };
     },
 
     async crearUsuario(correo, contrasena) {
@@ -126,7 +134,7 @@ export function crearClienteSupabase(opciones: OpcionesSupabase): ClienteSupabas
 
     async enlaceMagico(correo) {
       const datos = await generar(correo);
-      const tokenHash = datos?.properties?.hashed_token;
+      const tokenHash = datos?.properties?.hashed_token ?? datos?.hashed_token;
       if (!tokenHash) throw new Error('Supabase no devolvió el token del enlace mágico.');
       return { tokenHash };
     },
