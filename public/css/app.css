@@ -96,6 +96,11 @@ body {
   letter-spacing: 0.02em;
 }
 
+a.marca {
+  color: inherit;
+  text-decoration: none;
+}
+
 .barra-acciones {
   display: flex;
   flex-wrap: wrap;
