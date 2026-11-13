@@ -8,6 +8,12 @@
 export interface UsuarioCdh {
   username: string;
   activo: boolean;
+  /**
+   * Identidad no interactiva del CDH —con la que el PMS firma lo que escribe
+   * allá—. No es de una persona y no puede asignarse a nadie: el CDH no le
+   * abre sesión ni por el canje ni con contraseña.
+   */
+  servicio: boolean;
 }
 
 /** R6: la revocación puede fallar sin que la baja se deshaga (decisión #24). */
@@ -44,10 +50,18 @@ export function crearClienteCdh(opciones: OpcionesCdh): ClienteCdh {
       });
       if (respuesta.status === 404) return null;
       if (!respuesta.ok) throw new Error(`El CDH respondió ${respuesta.status} al consultar el usuario.`);
-      // El contrato real del CDH (server/routes/sso.js): `{ existe, activo }`.
-      const datos = (await respuesta.json()) as { existe?: unknown; activo?: unknown };
+      // El contrato real del CDH (server/routes/sso.js): `{ existe, activo, servicio }`.
+      const datos = (await respuesta.json()) as {
+        existe?: unknown;
+        activo?: unknown;
+        servicio?: unknown;
+      };
       if (datos.existe !== true) return null;
-      return { username, activo: datos.activo === true };
+      // Un CDH anterior a su PR #25 no manda `servicio`, y entonces aquí sale
+      // `false`: el portal se comporta como antes. No es un hueco —ese CDH
+      // tampoco tiene identidades de servicio— y el CDH que sí las tiene
+      // rechaza el canje por su cuenta, así que nunca abre sesión.
+      return { username, activo: datos.activo === true, servicio: datos.servicio === true };
     },
 
     async revocar(usuarioModulo) {

@@ -43,6 +43,8 @@ before(async () => {
   e.cdh.agregar('eva.rec', true);
   e.cdh.agregar('sistemas', true);
   e.cdh.agregar('inactivo.cdh', false);
+  // Identidad no interactiva del CDH: existe, está activa y no es de nadie.
+  e.cdh.agregar('arpon', true, true);
   await sembrarListaCrm(e.pool, ['beto@quartz.example', 'eva@quartz.example', 'nuevo@quartz.example']);
   ana = await comoQuien('ana@quartz.example');
 });
@@ -114,6 +116,42 @@ describe('R7 · asignar accesos', () => {
     });
     assert.equal(r.estado, 422);
     assert.deepEqual(r.cuerpo, { error: MENSAJES.noExisteEnCdh });
+  });
+
+  it('una identidad de servicio del CDH no se le asigna a nadie: 422', async () => {
+    // `arpon` pasa el formato de R7 y existe activa allá, así que lo único que
+    // la distingue es que el CDH la marca como de servicio. Asignársela a una
+    // persona le daría, en el CDH, permiso para mover el estado de las
+    // habitaciones.
+    const r = await ana.pedir('PUT', `${P}/api/admin/usuarios/${ID.eva}/accesos/cdh`, {
+      cuerpo: { usuario_modulo: 'arpon' },
+    });
+    assert.equal(r.estado, 422);
+    assert.deepEqual(r.cuerpo, { error: MENSAJES.identidadDeServicio });
+  });
+
+  it('el mensaje de una identidad de servicio no dice que no existe', async () => {
+    // Decirle «no existe en el CDH» a quien administra lo mandaría a buscar un
+    // usuario que sí está. Son dos causas distintas y dos mensajes distintos.
+    const servicio = await ana.pedir('PUT', `${P}/api/admin/usuarios/${ID.eva}/accesos/cdh`, {
+      cuerpo: { usuario_modulo: 'arpon' },
+    });
+    const fantasma = await ana.pedir('PUT', `${P}/api/admin/usuarios/${ID.eva}/accesos/cdh`, {
+      cuerpo: { usuario_modulo: 'fantasma' },
+    });
+    assert.notDeepEqual(servicio.cuerpo, fantasma.cuerpo);
+  });
+
+  it('la asignación rechazada no queda guardada', async () => {
+    await ana.pedir('PUT', `${P}/api/admin/usuarios/${ID.eva}/accesos/cdh`, {
+      cuerpo: { usuario_modulo: 'arpon' },
+    });
+    const fila = await unaFila<{ usuario_modulo: string }>(
+      e.pool,
+      `SELECT usuario_modulo FROM core.accesos WHERE usuario_id = $1::uuid AND modulo = 'cdh'`,
+      [ID.eva],
+    );
+    assert.notEqual(fila?.usuario_modulo, 'arpon');
   });
 
   it('el CRM no lleva usuario_modulo, y valida R5.2', async () => {
