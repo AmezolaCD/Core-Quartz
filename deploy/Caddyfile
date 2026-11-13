@@ -5,9 +5,27 @@
 #   https://<CQ_ORIGEN>/cdh/*     → CDH
 #   cualquier otra ruta           → 404
 #
+# Dos formas de `CQ_ORIGEN`:
+#   · un dominio sin esquema (localhost, o un dominio con certificado propio):
+#     Caddy pide el certificado y sirve HTTPS.
+#   · con `http://` (p. ej. http://portal.tudominio.mx): el HTTPS lo pone un
+#     túnel delante, como Cloudflare Tunnel. Caddy sirve HTTP y no pide nada.
+#     Por eso confía en las cabeceras X-Forwarded-* de los proxies privados:
+#     sin esto, la cookie de sesión pierde `Secure` y la IP del cliente se
+#     pierde. Un proxy de fuera no cambia nada, porque sus cabeceras se
+#     reemplazan.
+#
 # El CRM no pasa por aquí: vive en Vercel, en su propio dominio, y el portal
 # lo alcanza con la `url_base` absoluta de `core.modulos`.
 # ============================================================================
+
+{
+	servers {
+		# Confía en las cabeceras del proxy solo si viene de una IP privada
+		# (cloudflared corre en la misma máquina). Ver el comentario de arriba.
+		trusted_proxies static private_ranges
+	}
+}
 
 {$CQ_ORIGEN} {
 	encode zstd gzip
