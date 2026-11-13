@@ -4,6 +4,7 @@
 #
 #   bash deploy/verificar.sh                  # contra el .env de deploy/
 #   CQ_ORIGEN=localhost bash deploy/verificar.sh
+#   CQ_ORIGEN=http://portal.tudominio.mx bash deploy/verificar.sh   # detrás de un túnel
 #
 # No cambia nada: sólo levanta (si hace falta) y pregunta. Devuelve 0 si todo
 # está como debe, y 1 diciendo qué falló.
@@ -15,13 +16,18 @@ cd "$AQUI"
 
 : "${CQ_ORIGEN:=localhost}"
 export CQ_ORIGEN
-BASE="https://${CQ_ORIGEN}"
+# `CQ_ORIGEN` puede venir sin esquema (HTTPS, el de siempre) o con él: con
+# `http://` el origen está detrás de un túnel que pone el HTTPS.
+case "$CQ_ORIGEN" in
+  http://*|https://*) BASE="$CQ_ORIGEN" ;;
+  *)                  BASE="https://${CQ_ORIGEN}" ;;
+esac
 
 # Con `localhost`, Caddy firma con su CA interna, que este curl no conoce.
 CURL=(curl --silent --show-error --max-time 20)
-if [ "$CQ_ORIGEN" = "localhost" ] || [ "$CQ_ORIGEN" = "127.0.0.1" ]; then
-  CURL+=(--insecure)
-fi
+case "$BASE" in
+  https://localhost|https://127.0.0.1) CURL+=(--insecure) ;;
+esac
 
 fallos=0
 ok()    { printf '  \033[32m✓\033[0m %s\n' "$1"; }

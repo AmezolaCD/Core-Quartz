@@ -165,6 +165,37 @@ docker compose up -d --build
 Las migraciones no se deshacen solas. Si la versión anterior no entiende el
 esquema nuevo, hay que revertir la migración a mano antes.
 
+## Detrás de un túnel (sin abrir puertos)
+
+Cuando la máquina está en una red que no se puede configurar, por ejemplo la del
+hotel, no hace falta abrir los puertos 80 y 443 en el router. Un túnel de Cloudflare
+sale desde la máquina hacia afuera, y pone el HTTPS delante.
+
+En ese modo:
+
+1. En `deploy/.env`, `CQ_ORIGEN` lleva el esquema:
+   ```
+   CQ_ORIGEN=http://portal.tudominio.mx
+   ```
+   Caddy sirve HTTP y no pide certificados.
+2. En Cloudflare, el túnel apunta el nombre público a `http://localhost:80`.
+3. `verificar.sh` acepta el origen con esquema:
+   ```bash
+   CQ_ORIGEN=http://portal.tudominio.mx bash deploy/verificar.sh
+   ```
+
+Lo que cambia por debajo, y por qué importa:
+
+- Caddy confía en las cabeceras `X-Forwarded-*` de los proxies privados. Sin eso, la
+  cookie de sesión pierde `Secure` y el límite de intentos de entrada ve sólo la IP
+  del proxy, no la del cliente.
+- Esa confianza significa que alguien en la red local podría falsificar esas cabeceras.
+  Se cierra cuando se sepa desde qué IP llega `cloudflared` en la máquina, y se puede
+  restringir la lista de `trusted_proxies` a esa sola dirección (ver `deploy/Caddyfile`).
+
+Antes de usarlo, mide contra el dominio del túnel las tres cosas de la sección
+siguiente, en especial la IP real del cliente.
+
 ## Lo que falta medir, y por qué no está aquí
 
 El PRD §5 describe el público entrando por `core-quartz.vercel.app`, con Vercel
