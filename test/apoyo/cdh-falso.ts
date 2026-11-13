@@ -13,6 +13,8 @@ import type { AddressInfo } from 'node:net';
 export interface UsuarioCdhFalso {
   username: string;
   activo: boolean;
+  /** Identidad no interactiva del CDH (su PR #25). */
+  servicio: boolean;
 }
 
 export interface LlamadaCdh {
@@ -28,7 +30,7 @@ export interface CdhFalso {
   secreto: string;
   llamadas: LlamadaCdh[];
   usuarios: Map<string, UsuarioCdhFalso>;
-  agregar(username: string, activo?: boolean): UsuarioCdhFalso;
+  agregar(username: string, activo?: boolean, servicio?: boolean): UsuarioCdhFalso;
   /** Sesiones revocadas por `username` (R6). */
   revocaciones: Map<string, number>;
   /** Con `true`, toda petición muere sin respuesta. */
@@ -83,8 +85,12 @@ export async function levantarCdhFalso(opciones: OpcionesCdhFalso = {}): Promise
     if (peticion.method === 'GET' && consulta) {
       // R7: el CDH no distingue mayúsculas en su `username`.
       const usuario = usuarios.get(decodeURIComponent(consulta[1] ?? '').toLowerCase());
-      // Igual que el CDH real: 200 siempre, con `existe` y `activo`.
-      return responder(200, { existe: !!usuario, activo: !!usuario?.activo });
+      // Igual que el CDH real: 200 siempre, con `existe`, `activo` y `servicio`.
+      return responder(200, {
+        existe: !!usuario,
+        activo: !!usuario?.activo,
+        servicio: !!usuario?.servicio,
+      });
     }
 
     if (peticion.method === 'POST' && url.pathname === `${basePath}/api/auth/sso/revocar`) {
@@ -106,8 +112,8 @@ export async function levantarCdhFalso(opciones: OpcionesCdhFalso = {}): Promise
     llamadas,
     usuarios,
     revocaciones,
-    agregar(username, activo = true) {
-      const usuario: UsuarioCdhFalso = { username, activo };
+    agregar(username, activo = true, servicio = false) {
+      const usuario: UsuarioCdhFalso = { username, activo, servicio };
       usuarios.set(username.toLowerCase(), usuario);
       return usuario;
     },

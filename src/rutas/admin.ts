@@ -25,6 +25,7 @@ export const MENSAJES = {
   ultimoAdmin: 'Debe quedar al menos un administrador activo.',
   formatoUsuarioCdh: 'Sólo minúsculas, números, punto, guion y guion bajo.',
   noExisteEnCdh: 'No existe en el CDH o está inactivo.',
+  identidadDeServicio: 'Ese usuario del CDH es una identidad interna del sistema, no de una persona.',
   faltaEnCrm: 'Primero dalo de alta en CRM → Ajustes → Usuarios y permisos',
   desconocido: 'No encontramos a esa persona.',
   moduloDesconocido: 'Módulo desconocido.',
@@ -272,6 +273,17 @@ export function rutasAdmin(deps: Dependencias): Router {
       const enCdh = await deps.cdh.usuario(normal.valor);
       if (!enCdh || !enCdh.activo) {
         respuesta.status(422).json({ error: MENSAJES.noExisteEnCdh });
+        return;
+      }
+      // R7: el formato de arriba acepta los nombres de servicio del CDH
+      // —`arpon` pasa— y el CDH sí los distingue. Asignarle uno a una persona
+      // le daría, en el CDH, permiso para mover el estado de las habitaciones.
+      // El CDH rechaza el canje por su cuenta, pero el portal no tiene por qué
+      // dejar guardar una asignación que nunca va a funcionar: se dice aquí,
+      // con su propio mensaje, porque «no existe» sería mentira y mandaría a
+      // quien administra a buscar un usuario que sí está.
+      if (enCdh.servicio) {
+        respuesta.status(422).json({ error: MENSAJES.identidadDeServicio });
         return;
       }
     }
